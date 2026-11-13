@@ -4,10 +4,9 @@ import {
   FileSpreadsheet,
   HandCoins,
   LayoutDashboard,
-  LogOut,
   Menu,
   RotateCcw,
-  Shield,
+  Users,
   X,
 } from 'lucide-react';
 import { ActivePage, StaffAccount } from '../types';
@@ -17,7 +16,6 @@ interface SidebarProps {
   activePage: ActivePage;
   onNavigate: (page: ActivePage) => void;
   currentUser: StaffAccount;
-  onLogout: () => void;
   mobileOpen: boolean;
   onSetMobileOpen: (open: boolean) => void;
   dueAlertCount: number;
@@ -34,14 +32,13 @@ const NAV_ITEMS: {
   { id: 'pinjaman', label: 'Dana Sedang Dipinjam', icon: HandCoins },
   { id: 'pengembalian', label: 'Pengembalian Dana', icon: RotateCcw },
   { id: 'laporan', label: 'Laporan & Backup', icon: FileSpreadsheet },
-  { id: 'akun', label: 'Akun & Ubah PIN', icon: Shield },
+  { id: 'akun', label: 'Pengurus & Staf', icon: Users },
 ];
 
 export function Sidebar({
   activePage,
   onNavigate,
   currentUser,
-  onLogout,
   mobileOpen,
   onSetMobileOpen,
   dueAlertCount,
@@ -111,24 +108,22 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* Bottom User & Lock */}
+      {/* Bottom Active Operator Card */}
       <div className="border-t border-white/10 p-4 pb-safe">
-        <div className="rounded-xl bg-white/[0.05] px-3.5 py-3">
-          <p className="truncate font-display text-sm font-semibold text-white">
+        <button
+          type="button"
+          onClick={() => handleSelect('akun')}
+          className="w-full rounded-xl bg-white/[0.05] px-3.5 py-3 text-left transition-colors hover:bg-white/[0.09]"
+        >
+          <p className="text-[10px] font-semibold tracking-wider text-emerald-200/70 uppercase">
+            Petugas Aktif
+          </p>
+          <p className="mt-0.5 truncate font-display text-sm font-semibold text-white">
             {currentUser.name}
           </p>
           <p className="mt-0.5 text-xs text-[#DFB848]">
-            Peran: {currentUser.role}
+            Peran: {currentUser.role} · Ketuk untuk ganti
           </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={onLogout}
-          className="mt-2.5 flex min-h-[42px] w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-transparent px-3 py-2 text-xs font-semibold text-emerald-100 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <LogOut className="h-4 w-4 text-[#DFB848]" />
-          <span>Kunci Aplikasi / Ganti PIN</span>
         </button>
       </div>
     </div>
@@ -161,11 +156,11 @@ export function Sidebar({
 
         <button
           type="button"
-          onClick={onLogout}
+          onClick={() => handleSelect('akun')}
           className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/20 px-2.5 text-xs font-medium text-[#DFB848] hover:bg-white/10 whitespace-nowrap"
         >
-          <LogOut className="h-3.5 w-3.5" />
-          <span>Kunci</span>
+          <Users className="h-3.5 w-3.5" />
+          <span>{currentUser.role}</span>
         </button>
       </header>
 

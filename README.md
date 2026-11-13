@@ -6,14 +6,9 @@ Aplikasi web manajemen keuangan, pembukuan kas, dan pemantauan simpan pinjam unt
 
 ## Fitur Utama
 
-### 1. Login PIN, Keamanan Sesi, & Manajemen Akun Pengurus
-- **Akses Langsung via PIN (Tanpa Login Google):** Saat aplikasi dibuka, pengguna langsung diarahkan ke layar Login PIN dengan papan angka sentuh (*numeric keypad*) serta dukungan input keyboard fisik.
-- **PIN Default Awal:** `1234` untuk akun `Administrator Utama` (segera ubah setelah login pertama).
-- **Keamanan Backend:**
-  - PIN di-hash menggunakan `scrypt` + *salt* acak (tidak disimpan dalam teks polos).
-  - Seluruh endpoint API (`/api/*`) dilindungi oleh token sesi bertanda tangan **HMAC-SHA256** (`Authorization: Bearer <token>`) dan pembatasan percobaan login (*rate limiting*).
-  - Validasi peran (**Admin** vs **Staf**) ditegakkan langsung di sisi server.
-- **Manajemen Akun & Keamanan PIN:** Pengurus dapat mengubah PIN pribadi kapan saja. Akun **Admin** dapat menambah, mengubah, mereset PIN, mengaktifkan/menonaktifkan, maupun menghapus akun **Admin** atau **Staf** lainnya.
+### 1. Layar Pembuka Gelombang (`0% – 100%`) & Manajemen Petugas
+- **Akses Langsung Tanpa Login PIN / Tanpa Login Google:** Saat aplikasi dibuka, pengguna disambut layar pemuatan animasi gelombang progresif **0% hingga 100%** bertajuk **KOPERASI SIMPAN PINJAM ARTHA MANDIRI** sembari menyinkronkan data cloud secara langsung, lalu masuk otomatis ke Dashboard dengan transisi gelombang.
+- **Pengurus & Staf Koperasi:** Pengurus dapat menambah, mengedit, menonaktifkan, menghapus, dan mengganti **Petugas Aktif** (Admin/Staf) kapan saja agar setiap transaksi dan cetakan laporan tercatat sesuai nama petugas yang bertugas.
 
 ### 2. Dashboard Utama (Perhitungan Real-Time)
 Seluruh metrik dihitung otomatis langsung dari data transaksi nyata (tanpa data dummy permanen):
@@ -60,18 +55,16 @@ Seluruh metrik dihitung otomatis langsung dari data transaksi nyata (tanpa data 
   - Ekspor **Excel (`.csv`)** dengan format UTF-8 BOM.
   - Ekspor **PDF (`.pdf`)** ber-kop resmi KSP Cendana Artha Mandiri.
   - **Cetak Langsung** melalui dialog cetak browser dengan tata letak kertas A4 dan blok tanda tangan pengurus.
-- **Backup & Restore JSON:** Unduh seluruh database (transaksi, pinjaman, pengembalian, lampiran, dan akun) dalam satu file `.json` serta pulihkan kembali dengan validasi dan konfirmasi.
+- **Backup & Restore JSON:** Unduh seluruh database (transaksi, pinjaman, pengembalian, lampiran, dan daftar pengurus) dalam satu file `.json` serta pulihkan kembali dengan validasi dan konfirmasi.
 
 ---
 
 ## Teknologi & Database Cloud
 
 - **Frontend:** React 19, TypeScript, Tailwind CSS v4, Lucide React
-- **Backend & Keamanan:** Node.js, Express, `crypto` (PIN hashing `scrypt` & token sesi `HMAC-SHA256`)
-- **Database Utama:** **Firebase Cloud Firestore** (`firebase-applet-config.json` & aturan keamanan `firestore.rules`), sehingga seluruh data tersimpan persisten di cloud dan langsung tersinkronisasi lintas perangkat (desktop, tablet, maupun HP).
-- **Adapter Cadangan Opsional:** Mendukung PostgreSQL (`DATABASE_URL`) atau JSON lokal jika konfigurasi Firebase tidak digunakan.
+- **Database Cloud Real-Time:** **Firebase Cloud Firestore** (`firebase-applet-config.json` & aturan keamanan `firestore.rules`), sehingga seluruh data tersimpan persisten di cloud dan langsung tersinkronisasi real-time di berbagai perangkat (desktop, tablet, maupun HP).
 - **Ekspor Dokumen:** jsPDF & jspdf-autotable
-- **Build & Serverless:** Vite, `tsx`, Vercel Serverless Functions (`api/index.ts` & `vercel.json`)
+- **Build & Hosting:** Vite & Vercel (`vercel.json`)
 
 ---
 
@@ -82,15 +75,14 @@ Seluruh metrik dihitung otomatis langsung dari data transaksi nyata (tanpa data 
    npm install
    ```
 
-2. **Menjalankan mode pengembangan (Frontend + Backend Server):**
+2. **Menjalankan mode pengembangan:**
    ```bash
    npm run dev
    ```
 
-3. **Build produksi & menjalankan server produksi:**
+3. **Build produksi:**
    ```bash
    npm run build
-   npm start
    ```
 
 4. **Verifikasi tipe TypeScript & aturan keamanan Firestore:**
@@ -103,48 +95,41 @@ Seluruh metrik dihitung otomatis langsung dari data transaksi nyata (tanpa data 
 
 ## Panduan Deploy ke Vercel
 
-Karena database telah terhubung ke **Firebase Cloud Firestore** (`firebase-applet-config.json`), aplikasi sudah siap di-deploy ke Vercel **tanpa perlu mengisi `DATABASE_URL` atau konfigurasi database tambahan**:
+Karena frontend aplikasi terhubung langsung ke **Firebase Cloud Firestore** (`firebase-applet-config.json`) dengan sinkronisasi real-time, aplikasi siap di-deploy ke Vercel secara langsung tanpa perlu mengisi Environment Variables tambahan:
 
 1. **Import proyek ke Vercel** dari repositori GitHub Anda (pastikan file `firebase-applet-config.json` ikut ada di repositori).
-2. **Langsung klik Deploy:** Vercel akan membangun frontend (`dist`) dan mengarahkan rute `/api/*` ke `api/index.ts`. Variabel `SESSION_SECRET` dan `FIREBASE_WORKSPACE_KEY` sudah ditangani otomatis oleh sistem (opsional jika ingin diisi manual di Environment Variables Vercel).
-3. **Segera ubah PIN default `1234`** setelah login pertama melalui menu **Akun & Ubah PIN**.
+2. **Langsung klik Deploy:** Vercel akan membangun bundel produksi (`dist`) dan menyajikan aplikasi dengan routing SPA (`vercel.json`).
 
 ---
 
 ## Struktur Direktori Utama
 
 ```text
-├── api/
-│   └── index.ts                       # Entry point Vercel Serverless Function untuk /api/*
-├── server/
-│   ├── app.ts                         # Aplikasi Express, route API terproteksi, & RBAC
-│   ├── auth.ts                        # Hashing PIN (scrypt), token sesi HMAC, & rate limiter
-│   └── storage.ts                     # StorageAdapter (Firebase Firestore, PostgreSQL, & JSON lokal)
-├── server.ts                          # Server Node/Express lokal & integrasi Vite
 ├── firebase-applet-config.json        # Konfigurasi proyek Firebase & Firestore database
 ├── firebase-blueprint.json            # Skema entitas & koleksi Firestore
 ├── firestore.rules                    # Aturan keamanan Firestore tervalidasi ESLint
-├── vercel.json                        # Konfigurasi routing build & serverless Vercel
-├── .env.example                       # Template variabel lingkungan
+├── vercel.json                        # Konfigurasi build & routing SPA Vercel
 ├── index.html                         # Entri HTML & konfigurasi font
 ├── src/
-│   ├── App.tsx                        # Root aplikasi, manajemen token sesi, & routing menu
+│   ├── App.tsx                        # Root aplikasi, sinkronisasi real-time, & routing menu
 │   ├── firebase.ts                    # Inisialisasi Firebase SDK & uji koneksi boot
-│   ├── types.ts                       # Definisi tipe data transaksi, pinjaman, cicilan, & akun
-│   ├── index.css                      # Konfigurasi Tailwind CSS v4 & gaya cetak (@media print)
+│   ├── types.ts                       # Definisi tipe data transaksi, pinjaman, cicilan, & staf
+│   ├── index.css                      # Konfigurasi Tailwind CSS v4, animasi gelombang, & gaya cetak
+│   ├── services/
+│   │   └── firestoreService.ts        # Operasi CRUD & listener real-time Firebase Firestore
 │   ├── utils/
 │   │   ├── format.ts                  # Format Rupiah, DD/MM/YYYY, penomoran otomatis, & kalkulasi real-time
 │   │   └── export.ts                  # Utilitas ekspor Excel (.csv), PDF, & Backup JSON
 │   └── components/
 │       ├── BrandLogo.tsx              # Logo vektor KSP Cendana Artha Mandiri
-│       ├── PinLoginScreen.tsx         # Halaman Login PIN dengan papan angka interaktif
+│       ├── WaveLoadingScreen.tsx      # Layar loading gelombang 0–100% KOPERASI SIMPAN PINJAM ARTHA MANDIRI
 │       ├── Sidebar.tsx                # Sidebar desktop & menu lipat responsif untuk mobile
 │       ├── DashboardView.tsx          # 7 kartu ringkasan, pengingat jatuh tempo, & 4 grafik visual
 │       ├── CashTransactionsView.tsx   # Modul Uang Masuk & Uang Keluar
 │       ├── LoansView.tsx              # Modul Dana Sedang Dipinjam & detail pinjaman
 │       ├── RepaymentsView.tsx         # Modul Pengembalian Dana & cicilan bertahap
 │       ├── ReportsBackupView.tsx      # Laporan keuangan, buku kas terpadu, ekspor, & backup/restore
-│       ├── AccountsPinView.tsx        # Ubah PIN pribadi & manajemen akun Admin/Staf
+│       ├── AccountsPinView.tsx        # Manajemen Pengurus & Staf serta petugas aktif
 │       ├── AttachmentField.tsx        # Unggah & kompresi bukti Foto/PDF
 │       ├── AttachmentViewerModal.tsx  # Pratinjau lampiran Foto/PDF
 │       └── ConfirmModal.tsx           # Dialog konfirmasi aksi sensitif
@@ -156,7 +141,7 @@ Karena database telah terhubung ke **Firebase Cloud Firestore** (`firebase-apple
 
 **RioProjectX**
 
-Aplikasi **Koperasi Simpan Pinjam Cendana Artha Mandiri** ini dirancang dan dikembangkan oleh **RioProjectX** sebagai solusi digitalisasi tata kelola keuangan koperasi yang bersih, aman, akurat, transparan, dan tersinkronisasi di cloud untuk berbagai perangkat.
+Aplikasi **Koperasi Simpan Pinjam Cendana Artha Mandiri** ini dirancang dan dikembangkan oleh **RioProjectX** sebagai solusi digitalisasi tata kelola keuangan koperasi yang bersih, akurat, transparan, dan tersinkronisasi di cloud untuk berbagai perangkat.
 
 - **Pengembang:** RioProjectX
-- **Fokus Pengembangan:** Sistem Informasi Keuangan, Integrasi Cloud Database, Aplikasi Web Responsif, & Keamanan Data Real-Time
+- **Fokus Pengembangan:** Sistem Informasi Keuangan, Integrasi Cloud Database, Aplikasi Web Responsif, & Sinkronisasi Data Real-Time

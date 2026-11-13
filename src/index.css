@@ -26,6 +26,59 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* Wave Loading Screen Animations */
+@keyframes waveSlideLeft {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes waveSlideRight {
+  0% {
+    transform: translate3d(-50%, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes waveCurtainExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    clip-path: ellipse(150% 100% at 50% 50%);
+  }
+  55% {
+    opacity: 1;
+    transform: translateY(-4%) scale(1.015);
+    clip-path: ellipse(130% 85% at 50% 25%);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-100%) scale(1.03);
+    clip-path: ellipse(120% 55% at 50% 0%);
+  }
+}
+
+.wave-animate-slow {
+  animation: waveSlideLeft 7s linear infinite;
+}
+
+.wave-animate-reverse {
+  animation: waveSlideRight 5.2s linear infinite;
+}
+
+.wave-animate-fast {
+  animation: waveSlideLeft 3.8s linear infinite;
+}
+
+.wave-curtain-exit {
+  animation: waveCurtainExit 0.72s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 @media print {
   @page {
     size: A4 portrait;

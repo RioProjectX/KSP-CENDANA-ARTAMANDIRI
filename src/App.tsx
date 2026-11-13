@@ -5,10 +5,26 @@ import { AttachmentViewerModal } from './components/AttachmentViewerModal';
 import { CashTransactionsView } from './components/CashTransactionsView';
 import { DashboardView } from './components/DashboardView';
 import { LoansView } from './components/LoansView';
-import { PinLoginScreen } from './components/PinLoginScreen';
 import { RepaymentsView } from './components/RepaymentsView';
 import { ReportsBackupView } from './components/ReportsBackupView';
 import { Sidebar } from './components/Sidebar';
+import { WaveLoadingScreen } from './components/WaveLoadingScreen';
+import {
+  createCashTransaction,
+  createLoanRecord,
+  createRepaymentRecord,
+  createStaffAccount,
+  removeCashTransaction,
+  removeLoanRecord,
+  removeRepaymentRecord,
+  removeStaffAccount,
+  resetKoperasiLedger,
+  restoreKoperasiDatabase,
+  subscribeKoperasiDatabase,
+  updateCashTransaction,
+  updateLoanRecord,
+  updateStaffAccount,
+} from './services/firestoreService';
 import {
   ActivePage,
   Attachment,
@@ -21,18 +37,17 @@ import {
 } from './types';
 import { computeKoperasiMetrics } from './utils/format';
 
-interface PublicStateResponse extends KoperasiDatabase {
-  hasDefaultPin?: boolean;
-}
+const FALLBACK_OPERATOR: StaffAccount = {
+  id: 'admin-utama',
+  name: 'Administrator Utama',
+  role: 'Admin',
+  active: true,
+  createdAt: new Date().toISOString(),
+};
+
+const ACTIVE_OP_STORAGE_KEY = 'ksp_active_operator_id';
 
 export default function App() {
-  const [loginAccounts, setLoginAccounts] = useState<
-    Pick<StaffAccount, 'id' | 'name' | 'role'>[]
-  >([]);
-  const [hasDefaultPin, setHasDefaultPin] = useState<boolean>(true);
-  const [currentUser, setCurrentUser] = useState<StaffAccount | null>(null);
-  const [authToken, setAuthToken] = useState<string>('');
-
   const [db, setDb] = useState<KoperasiDatabase>({
     version: 1,
     lastModified: '',
@@ -41,159 +56,78 @@ export default function App() {
     loans: [],
     repayments: [],
   });
-  const [loadingState, setLoadingState] = useState<boolean>(false);
+  const [dataReady, setDataReady] = useState<boolean>(false);
+  const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [syncError, setSyncError] = useState<string>('');
+  const [selectedOperatorId, setSelectedOperatorId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_OP_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+
   const [activePage, setActivePage] = useState<ActivePage>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | null>(null);
 
-  const fetchAuthAccounts = useCallback(async () => {
+  useEffect(() => {
+    void testFirebaseConnection();
+    const unsub = subscribeKoperasiDatabase(
+      (nextDb) => {
+        setDb(nextDb);
+        setDataReady(true);
+        setSyncError('');
+      },
+      (err) => {
+        setSyncError(err.message || 'Gagal menyinkronkan data dengan Firebase Firestore.');
+        setDataReady(true);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  const currentUser = useMemo<StaffAccount>(() => {
+    const activeAccounts = db.accounts.filter((a) => a.active);
+    if (selectedOperatorId) {
+      const matched = activeAccounts.find((a) => a.id === selectedOperatorId);
+      if (matched) return matched;
+    }
+    const admin = activeAccounts.find((a) => a.role === 'Admin');
+    return admin || activeAccounts[0] || FALLBACK_OPERATOR;
+  }, [db.accounts, selectedOperatorId]);
+
+  const handleSwitchOperator = useCallback((acc: StaffAccount) => {
+    setSelectedOperatorId(acc.id);
     try {
-      const res = await fetch('/api/auth/accounts');
-      if (!res.ok) return;
-      const data = (await res.json()) as {
-        accounts: Pick<StaffAccount, 'id' | 'name' | 'role'>[];
-        hasDefaultPin: boolean;
-      };
-      setLoginAccounts(data.accounts || []);
-      setHasDefaultPin(Boolean(data.hasDefaultPin));
+      localStorage.setItem(ACTIVE_OP_STORAGE_KEY, acc.id);
     } catch {
-      // ignore transient network errors on boot
+      // ignore storage failure in private mode
     }
   }, []);
 
-  const handleLogout = useCallback(() => {
-    setCurrentUser(null);
-    setAuthToken('');
-    setMobileMenuOpen(false);
-    setPreselectedLoanId(null);
-    void fetchAuthAccounts();
-  }, [fetchAuthAccounts]);
-
-  const fetchState = useCallback(
-    async (token: string) => {
-      if (!token) return;
-      setLoadingState(true);
-      try {
-        const res = await fetch('/api/state', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.status === 401) {
-          handleLogout();
-          return;
-        }
-        if (!res.ok) throw new Error('Gagal memuat data koperasi.');
-        const data = (await res.json()) as PublicStateResponse;
-        setDb({
-          version: data.version,
-          lastModified: data.lastModified,
-          accounts: data.accounts,
-          transactions: data.transactions,
-          loans: data.loans,
-          repayments: data.repayments,
-        });
-        if (typeof data.hasDefaultPin === 'boolean') {
-          setHasDefaultPin(data.hasDefaultPin);
-        }
-      } finally {
-        setLoadingState(false);
-      }
-    },
-    [handleLogout]
-  );
-
-  useEffect(() => {
-    void testFirebaseConnection();
-    void fetchAuthAccounts();
-  }, [fetchAuthAccounts]);
-
-  const handleLoginSuccess = (user: StaffAccount, token: string) => {
-    setCurrentUser(user);
-    setAuthToken(token);
-    setActivePage('dashboard');
-    void fetchState(token);
-  };
-
-  const applyServerState = (state: PublicStateResponse) => {
-    setDb({
-      version: state.version,
-      lastModified: state.lastModified,
-      accounts: state.accounts,
-      transactions: state.transactions,
-      loans: state.loans,
-      repayments: state.repayments,
-    });
-    if (typeof state.hasDefaultPin === 'boolean') {
-      setHasDefaultPin(state.hasDefaultPin);
-    }
-  };
-
-  const apiMutate = async (url: string, method: string, body?: unknown) => {
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${authToken}`,
-    };
-    if (body !== undefined) {
-      headers['Content-Type'] = 'application/json';
-    }
-    const res = await fetch(url, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    const rawText = await res.text();
-    let data: Record<string, unknown> = {};
-    try {
-      data = JSON.parse(rawText) as Record<string, unknown>;
-    } catch {
-      throw new Error(`Respons server tidak valid (HTTP ${res.status}).`);
-    }
-    if (res.status === 401) {
-      handleLogout();
-      throw new Error((data.error as string) || 'Sesi berakhir. Silakan masuk ulang.');
-    }
-    if (!res.ok) {
-      throw new Error((data.error as string) || 'Terjadi kesalahan pada server.');
-    }
-    if (data.state) {
-      applyServerState(data.state as PublicStateResponse);
-    }
-    return data;
-  };
-
-  const handleFetchBackup = async (): Promise<KoperasiDatabase> => {
-    const res = await fetch('/api/backup', {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    if (res.status === 401) {
-      handleLogout();
-      throw new Error('Sesi berakhir. Silakan login ulang.');
-    }
-    if (!res.ok) {
-      throw new Error('Gagal mengambil data backup dari server.');
-    }
-    return (await res.json()) as KoperasiDatabase;
-  };
-
-  // Computed real-time financial metrics
   const { computedLoans, summary, ledger } = useMemo(
     () => computeKoperasiMetrics(db),
     [db]
   );
 
-  // Handlers
+  // Firestore CRUD Handlers
   const handleSaveTransaction = async (
     payload: Omit<CashTransaction, 'id' | 'createdAt' | 'updatedAt'>,
     editingId?: string
   ) => {
     if (editingId) {
-      await apiMutate(`/api/transactions/${editingId}`, 'PUT', payload);
+      const existing = db.transactions.find((t) => t.id === editingId);
+      if (!existing) throw new Error('Transaksi tidak ditemukan.');
+      await updateCashTransaction(existing, payload);
     } else {
-      await apiMutate('/api/transactions', 'POST', payload);
+      await createCashTransaction(payload);
     }
   };
 
   const handleDeleteTransaction = async (id: string) => {
-    await apiMutate(`/api/transactions/${id}`, 'DELETE');
+    await removeCashTransaction(id);
   };
 
   const handleSaveLoan = async (
@@ -201,71 +135,88 @@ export default function App() {
     editingId?: string
   ) => {
     if (editingId) {
-      await apiMutate(`/api/loans/${editingId}`, 'PUT', payload);
+      const existing = db.loans.find((l) => l.id === editingId);
+      if (!existing) throw new Error('Data pinjaman tidak ditemukan.');
+      await updateLoanRecord(existing, payload);
     } else {
-      await apiMutate('/api/loans', 'POST', payload);
+      await createLoanRecord(payload);
     }
   };
 
   const handleDeleteLoan = async (id: string) => {
-    await apiMutate(`/api/loans/${id}`, 'DELETE');
+    await removeLoanRecord(id, db.repayments);
   };
 
   const handleAddRepayment = async (payload: Omit<Repayment, 'id' | 'createdAt'>) => {
-    await apiMutate('/api/repayments', 'POST', payload);
+    const loan = db.loans.find((l) => l.id === payload.loanId);
+    if (!loan) throw new Error('Nomor pinjaman tidak ditemukan.');
+    const paidSoFar = db.repayments
+      .filter((r) => r.loanId === loan.id)
+      .reduce((sum, r) => sum + r.amount, 0);
+    const remaining = Math.max(0, loan.totalAmount - paidSoFar);
+    if (payload.amount > remaining) {
+      throw new Error(`Nominal pembayaran melebihi sisa tagihan (${remaining}).`);
+    }
+    await createRepaymentRecord({
+      ...payload,
+      loanTxNumber: loan.txNumber,
+    });
   };
 
   const handleDeleteRepayment = async (id: string) => {
-    await apiMutate(`/api/repayments/${id}`, 'DELETE');
+    await removeRepaymentRecord(id);
+  };
+
+  const handleFetchBackup = async (): Promise<KoperasiDatabase> => {
+    return {
+      ...db,
+      lastModified: new Date().toISOString(),
+    };
   };
 
   const handleRestoreBackup = async (backupData: KoperasiDatabase) => {
-    await apiMutate('/api/restore', 'POST', backupData);
+    await restoreKoperasiDatabase(backupData);
   };
 
-  const handleResetLedger = async (pin: string, accountId: string) => {
-    await apiMutate('/api/reset', 'POST', { pin, accountId });
-  };
-
-  const handleChangeOwnPin = async (oldPin: string, newPin: string) => {
-    if (!currentUser) return;
-    await apiMutate('/api/auth/change-pin', 'POST', {
-      accountId: currentUser.id,
-      oldPin,
-      newPin,
-    });
+  const handleResetLedger = async () => {
+    await resetKoperasiLedger();
   };
 
   const handleCreateAccount = async (payload: {
     name: string;
     role: UserRole;
-    pin: string;
     active: boolean;
   }) => {
-    await apiMutate('/api/accounts', 'POST', payload);
+    await createStaffAccount(payload);
   };
 
   const handleUpdateAccount = async (
     id: string,
-    payload: { name?: string; role?: UserRole; pin?: string; active?: boolean }
+    payload: { name?: string; role?: UserRole; active?: boolean }
   ) => {
-    await apiMutate(`/api/accounts/${id}`, 'PUT', payload);
-    if (currentUser && currentUser.id === id) {
-      setCurrentUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              name: payload.name ?? prev.name,
-              role: payload.role ?? prev.role,
-              active: payload.active ?? prev.active,
-            }
-          : null
-      );
+    const current = db.accounts.find((a) => a.id === id);
+    if (!current) throw new Error('Akun tidak ditemukan.');
+
+    const nextRole = payload.role ?? current.role;
+    const nextActive = payload.active ?? current.active;
+    const otherActiveAdmin = db.accounts.some(
+      (a) => a.id !== id && a.active && a.role === 'Admin'
+    );
+    if (!otherActiveAdmin && (nextRole !== 'Admin' || !nextActive)) {
+      throw new Error('Minimal harus ada 1 akun Admin yang aktif.');
     }
+
+    await updateStaffAccount(current, payload);
   };
 
   const handleDeleteAccount = async (id: string) => {
-    await apiMutate(`/api/accounts/${id}`, 'DELETE');
+    const remainingAdmins = db.accounts.filter(
+      (a) => a.id !== id && a.active && a.role === 'Admin'
+    );
+    if (remainingAdmins.length === 0) {
+      throw new Error('Tidak dapat menghapus akun Admin terakhir.');
+    }
+    await removeStaffAccount(id);
   };
 
   const handleGoToRepayment = (loanId: string) => {
@@ -273,20 +224,17 @@ export default function App() {
     setActivePage('pengembalian');
   };
 
-  if (!currentUser || !authToken) {
-    return (
-      <PinLoginScreen
-        accounts={loginAccounts}
-        hasDefaultPin={hasDefaultPin}
-        onLoginSuccess={handleLoginSuccess}
-      />
-    );
-  }
-
   const dueAlertCount = summary.overdueLoanCount + summary.dueSoonLoanCount;
 
   return (
     <div className="min-h-screen bg-[#F6F8F6] text-[#0F1F17] flex flex-col lg:flex-row">
+      {showSplash && (
+        <WaveLoadingScreen
+          dataReady={dataReady}
+          onFinished={() => setShowSplash(false)}
+        />
+      )}
+
       <Sidebar
         activePage={activePage}
         onNavigate={(page) => {
@@ -294,7 +242,6 @@ export default function App() {
           setActivePage(page);
         }}
         currentUser={currentUser}
-        onLogout={handleLogout}
         mobileOpen={mobileMenuOpen}
         onSetMobileOpen={setMobileMenuOpen}
         dueAlertCount={dueAlertCount}
@@ -302,9 +249,18 @@ export default function App() {
 
       <main className="flex-1 min-w-0">
         <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
-          {loadingState && db.lastModified === '' ? (
+          {syncError && (
+            <div
+              role="alert"
+              className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-700"
+            >
+              {syncError}
+            </div>
+          )}
+
+          {!dataReady ? (
             <div className="rounded-xl border border-[#DCE4DE] bg-white p-10 text-center text-sm text-[#5C6E63]">
-              Memuat data keuangan KSP Cendana Artha Mandiri...
+              Menghubungkan data Koperasi Simpan Pinjam Artha Mandiri...
             </div>
           ) : (
             <>
@@ -372,7 +328,6 @@ export default function App() {
                   summary={summary}
                   currentUserName={currentUser.name}
                   currentUserRole={currentUser.role}
-                  currentUserId={currentUser.id}
                   onFetchBackup={handleFetchBackup}
                   onRestoreBackup={handleRestoreBackup}
                   onResetLedger={handleResetLedger}
@@ -383,7 +338,7 @@ export default function App() {
                 <AccountsPinView
                   currentUser={currentUser}
                   accounts={db.accounts}
-                  onChangeOwnPin={handleChangeOwnPin}
+                  onSwitchOperator={handleSwitchOperator}
                   onCreateAccount={handleCreateAccount}
                   onUpdateAccount={handleUpdateAccount}
                   onDeleteAccount={handleDeleteAccount}

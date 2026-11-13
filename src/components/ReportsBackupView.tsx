@@ -25,10 +25,9 @@ interface ReportsBackupViewProps {
   summary: DashboardSummary;
   currentUserName: string;
   currentUserRole: UserRole;
-  currentUserId: string;
   onFetchBackup: () => Promise<KoperasiDatabase>;
   onRestoreBackup: (data: KoperasiDatabase) => Promise<void>;
-  onResetLedger: (pin: string, accountId: string) => Promise<void>;
+  onResetLedger: () => Promise<void>;
 }
 
 type PeriodMode = 'harian' | 'bulanan' | 'tahunan' | 'rentang' | 'semua';
@@ -39,7 +38,6 @@ export function ReportsBackupView({
   summary,
   currentUserName,
   currentUserRole,
-  currentUserId,
   onFetchBackup,
   onRestoreBackup,
   onResetLedger,
@@ -63,7 +61,7 @@ export function ReportsBackupView({
 
   // Reset Ledger states
   const [resetModalOpen, setResetModalOpen] = useState(false);
-  const [resetPin, setResetPin] = useState('');
+  const [resetConfirmed, setResetConfirmed] = useState(false);
   const [resetError, setResetError] = useState('');
   const [resetting, setResetting] = useState(false);
 
@@ -189,21 +187,21 @@ export function ReportsBackupView({
   const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetError('');
-    if (!resetPin.trim()) {
-      setResetError('Masukkan PIN Admin Anda.');
+    if (!resetConfirmed) {
+      setResetError('Centang kotak konfirmasi terlebih dahulu.');
       return;
     }
     setResetting(true);
     try {
-      await onResetLedger(resetPin.trim(), currentUserId);
+      await onResetLedger();
       setResetModalOpen(false);
-      setResetPin('');
+      setResetConfirmed(false);
       setBackupMessage({
         type: 'ok',
         text: 'Seluruh transaksi pembukuan berhasil dikosongkan.',
       });
     } catch (err) {
-      setResetError(err instanceof Error ? err.message : 'PIN Admin tidak valid.');
+      setResetError(err instanceof Error ? err.message : 'Gagal mengosongkan pembukuan.');
     } finally {
       setResetting(false);
     }
@@ -556,7 +554,7 @@ export function ReportsBackupView({
             <button
               type="button"
               onClick={() => {
-                setResetPin('');
+                setResetConfirmed(false);
                 setResetError('');
                 setResetModalOpen(true);
               }}
@@ -603,19 +601,17 @@ export function ReportsBackupView({
               Tindakan ini akan menghapus seluruh transaksi kas, data pinjaman, dan pengembalian dana sehingga pembukuan kembali ke Rp 0. Akun Admin &amp; Staf tetap dipertahankan. Unduh backup JSON terlebih dahulu jika diperlukan.
             </p>
             <form onSubmit={handleResetSubmit} className="mt-4 space-y-3">
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-[#2A3B31]">
-                  Konfirmasi PIN Admin
-                </label>
+              <label className="flex items-start gap-2.5 rounded-lg border border-red-200 bg-red-50/70 p-3 text-xs text-red-900 cursor-pointer">
                 <input
-                  type="password"
-                  inputMode="numeric"
-                  value={resetPin}
-                  onChange={(e) => setResetPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="Masukkan PIN Admin"
-                  className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] px-3 font-mono text-sm tracking-widest focus:border-red-600 focus:outline-none"
+                  type="checkbox"
+                  checked={resetConfirmed}
+                  onChange={(e) => setResetConfirmed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded accent-red-700"
                 />
-              </div>
+                <span>
+                  Saya yakin ingin mengosongkan seluruh data transaksi kas, pinjaman, dan pengembalian ke Rp 0.
+                </span>
+              </label>
               {resetError && <p className="text-xs font-medium text-red-700">{resetError}</p>}
               <div className="flex justify-end gap-2 pt-2">
                 <button
