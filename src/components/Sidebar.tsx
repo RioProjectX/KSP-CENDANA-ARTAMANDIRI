@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { ActivePage, StaffAccount } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
   activePage: ActivePage;
@@ -63,14 +64,17 @@ export function Sidebar({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => onSetMobileOpen(false)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-emerald-100 hover:bg-white/10 lg:hidden"
-          aria-label="Tutup Menu"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <PWAInstallButton />
+          <button
+            type="button"
+            onClick={() => onSetMobileOpen(false)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-emerald-100 hover:bg-white/10 lg:hidden"
+            aria-label="Tutup Menu"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       {/* Navigation Links */}
@@ -154,14 +158,17 @@ export function Sidebar({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => handleSelect('akun')}
-          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/20 px-2.5 text-xs font-medium text-[#DFB848] hover:bg-white/10 whitespace-nowrap"
-        >
-          <Users className="h-3.5 w-3.5" />
-          <span>{currentUser.role}</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <PWAInstallButton />
+          <button
+            type="button"
+            onClick={() => handleSelect('akun')}
+            className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/20 px-2.5 text-xs font-medium text-[#DFB848] hover:bg-white/10 whitespace-nowrap"
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span>{currentUser.role}</span>
+          </button>
+        </div>
       </header>
 
       {/* Mobile Slide-Over Drawer */}
