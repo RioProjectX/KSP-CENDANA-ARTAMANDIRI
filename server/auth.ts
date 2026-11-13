@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import firebaseConfig from '../firebase-applet-config.json';
 import type { UserRole } from '../src/types';
 
 export interface SessionPayload {
@@ -16,34 +17,28 @@ function getSessionSecret(): string {
   if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length >= 16) {
     return process.env.SESSION_SECRET.trim();
   }
-  try {
-    const dataDir = path.join(process.cwd(), 'data');
-    const secretFile = path.join(dataDir, '.session-secret');
-    if (fs.existsSync(secretFile)) {
-      return fs.readFileSync(secretFile, 'utf-8').trim();
-    }
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const generated = crypto.randomBytes(32).toString('hex');
-    fs.writeFileSync(secretFile, generated, 'utf-8');
-    return generated;
-  } catch {
-    // Serverless (e.g. Vercel) read-only fallback derived from project Firebase config
-    let projectSeed = 'ksp-cendana-artha-mandiri-session-seed';
+
+  // On Vercel/serverless, derive a stable secret across all cold starts from the project's Firebase config
+  if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
     try {
-      const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(cfgPath)) {
-        projectSeed = fs.readFileSync(cfgPath, 'utf-8');
+      const dataDir = path.join(process.cwd(), 'data');
+      const secretFile = path.join(dataDir, '.session-secret');
+      if (fs.existsSync(secretFile)) {
+        return fs.readFileSync(secretFile, 'utf-8').trim();
       }
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const generated = crypto.randomBytes(32).toString('hex');
+      fs.writeFileSync(secretFile, generated, 'utf-8');
+      return generated;
     } catch {
-      // ignore
+      // Fall through to deterministic project-scoped secret
     }
-    return crypto
-      .createHash('sha256')
-      .update(`${projectSeed}:${process.env.VERCEL_PROJECT_ID || 'ksp-cam'}`)
-      .digest('hex');
   }
+
+  const seed = `${firebaseConfig.projectId}:${firebaseConfig.firestoreDatabaseId}:${firebaseConfig.appId}:${firebaseConfig.apiKey}`;
+  return crypto.createHash('sha256').update(seed).digest('hex');
 }
 
 export function hashPin(pin: string): string {
@@ -73,7 +68,6 @@ export function verifyPin(
     };
   }
 
-  // Legacy plaintext compatibility (e.g., older JSON backups)
   const a = Buffer.from(inputPin, 'utf-8');
   const b = Buffer.from(storedPin, 'utf-8');
   if (a.length !== b.length) return { valid: false, needsRehash: false };
@@ -125,7 +119,6 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-// Simple PIN brute-force rate limiter
 const failedAttempts = new Map<string, { count: number; lockedUntil: number }>();
 
 export function checkLoginRateLimit(ipKey: string): { allowed: boolean; waitSeconds: number } {
@@ -143,7 +136,7 @@ export function checkLoginRateLimit(ipKey: string): { allowed: boolean; waitSeco
 export function recordLoginFailure(ipKey: string) {
   const now = Date.now();
   const prev = failedAttempts.get(ipKey);
-  const count = prev && prev.lockedUntil <= now ? prev.count + 1 : prev ? prev.count + 1 : 1;
+  const count = prev ? prev.count + 1 : 1;
   if (count >= 5) {
     failedAttempts.set(ipKey, { count: 0, lockedUntil: now + 60_000 });
   } else {

@@ -35,9 +35,16 @@ export function PinLoginScreen({
           accountId: selectedAccountId || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'PIN tidak valid.');
+      const rawText = await res.text();
+      let data: { user?: StaffAccount; token?: string; error?: string } = {};
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        setError(`Server mengembalikan respons tidak valid (HTTP ${res.status}).`);
+        return;
+      }
+      if (!res.ok || !data.user || !data.token) {
+        setError(data.error || `PIN tidak valid (HTTP ${res.status}).`);
         setPin('');
       } else {
         onLoginSuccess(data.user, data.token);

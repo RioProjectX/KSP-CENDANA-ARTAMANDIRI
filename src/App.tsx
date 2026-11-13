@@ -140,16 +140,22 @@ export default function App() {
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    const data = await res.json();
+    const rawText = await res.text();
+    let data: Record<string, unknown> = {};
+    try {
+      data = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      throw new Error(`Respons server tidak valid (HTTP ${res.status}).`);
+    }
     if (res.status === 401) {
       handleLogout();
-      throw new Error(data.error || 'Sesi berakhir. Silakan masuk ulang.');
+      throw new Error((data.error as string) || 'Sesi berakhir. Silakan masuk ulang.');
     }
     if (!res.ok) {
-      throw new Error(data.error || 'Terjadi kesalahan pada server.');
+      throw new Error((data.error as string) || 'Terjadi kesalahan pada server.');
     }
     if (data.state) {
-      applyServerState(data.state);
+      applyServerState(data.state as PublicStateResponse);
     }
     return data;
   };

@@ -1,21 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { getApps, initializeApp } from 'firebase/app';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  getDocs,
-  getFirestore,
-  setDoc,
-  updateDoc,
-  writeBatch,
-  type Firestore,
-} from 'firebase/firestore';
-import { Pool } from 'pg';
+import firebaseConfig from '../firebase-applet-config.json';
 import type {
-  Attachment,
   CashTransaction,
   KoperasiDatabase,
   Loan,
@@ -25,7 +11,7 @@ import type {
 import { hashPin } from './auth';
 
 export interface StorageAdapter {
-  readonly mode: 'firebase-firestore' | 'postgres' | 'json-file';
+  readonly mode: 'firebase-firestore' | 'json-file';
   init(): Promise<void>;
   getAccounts(includePin?: boolean): Promise<StaffAccount[]>;
   findAccountById(id: string): Promise<StaffAccount | null>;
@@ -71,48 +57,85 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   return clean as T;
 }
 
-interface FirebaseAppletConfig {
-  projectId: string;
-  appId: string;
-  apiKey: string;
-  authDomain: string;
-  firestoreDatabaseId: string;
-  storageBucket?: string;
-  messagingSenderId?: string;
-}
+// ============================================================================
+// Firestore REST Value Codec (Zero gRPC / Zero Serverless Cold-Start Hang)
+// ============================================================================
+type FirestoreValue =
+  | { stringValue: string }
+  | { booleanValue: boolean }
+  | { integerValue: string }
+  | { doubleValue: number }
+  | { nullValue: null }
+  | { mapValue: { fields: Record<string, FirestoreValue> } }
+  | { arrayValue: { values: FirestoreValue[] } };
 
-function loadFirebaseConfig(): FirebaseAppletConfig | null {
-  try {
-    const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    if (!fs.existsSync(cfgPath)) return null;
-    const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')) as FirebaseAppletConfig;
-    if (
-      !raw?.projectId ||
-      raw.projectId === 'remixed-project-id' ||
-      !raw?.firestoreDatabaseId
-    ) {
-      return null;
-    }
-    return raw;
-  } catch {
-    return null;
+function encodeValue(val: unknown): FirestoreValue {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'string') return { stringValue: val };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val)
+      ? { integerValue: String(val) }
+      : { doubleValue: val };
   }
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map(encodeValue) } };
+  }
+  if (typeof val === 'object') {
+    return {
+      mapValue: { fields: encodeFields(val as Record<string, unknown>) },
+    };
+  }
+  return { stringValue: String(val) };
+}
+
+function encodeFields(obj: Record<string, unknown>): Record<string, FirestoreValue> {
+  const fields: Record<string, FirestoreValue> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      fields[k] = encodeValue(v);
+    }
+  }
+  return fields;
+}
+
+function decodeValue(v: FirestoreValue): unknown {
+  if ('stringValue' in v) return v.stringValue;
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('nullValue' in v) return null;
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(decodeValue);
+  if ('mapValue' in v) return decodeFields(v.mapValue.fields || {});
+  return undefined;
+}
+
+function decodeFields<T = Record<string, unknown>>(
+  fields: Record<string, FirestoreValue> | undefined
+): T {
+  const out: Record<string, unknown> = {};
+  if (!fields) return out as T;
+  for (const [k, v] of Object.entries(fields)) {
+    out[k] = decodeValue(v);
+  }
+  return out as T;
 }
 
 // ============================================================================
-// 1. Firebase Firestore Storage Adapter
+// 1. Firebase Cloud Firestore REST Adapter (Works on Vercel & Local Node)
 // ============================================================================
-class FirestoreStorage implements StorageAdapter {
-  readonly mode = 'firebase-firestore' as const;
-  private db: Firestore;
-  private workspaceId: string;
-  private initializedPromise: Promise<void> | null = null;
+type CollectionName = 'accounts' | 'transactions' | 'loans' | 'repayments';
 
-  constructor(config: FirebaseAppletConfig) {
-    const app =
-      getApps().find((a) => a.name === 'ksp-server') ||
-      initializeApp(config, 'ksp-server');
-    this.db = getFirestore(app, config.firestoreDatabaseId);
+class FirestoreRestStorage implements StorageAdapter {
+  readonly mode = 'firebase-firestore' as const;
+  private baseUrl: string;
+  private apiKey: string;
+  private workspaceId: string;
+  private initialized = false;
+
+  constructor(cfg: typeof firebaseConfig) {
+    this.baseUrl = `https://firestore.googleapis.com/v1/projects/${cfg.projectId}/databases/${cfg.firestoreDatabaseId}/documents`;
+    this.apiKey = cfg.apiKey;
     const rawKey = process.env.FIREBASE_WORKSPACE_KEY?.trim();
     this.workspaceId =
       rawKey && /^[a-zA-Z0-9_\-]{20,128}$/.test(rawKey)
@@ -120,42 +143,100 @@ class FirestoreStorage implements StorageAdapter {
         : 'ksp-cendana-artha-mandiri-prod-v1';
   }
 
-  private col(name: 'accounts' | 'transactions' | 'loans' | 'repayments') {
-    return collection(this.db, 'koperasi', this.workspaceId, name);
+  private docUrl(col: CollectionName, id: string): string {
+    return `${this.baseUrl}/koperasi/${this.workspaceId}/${col}/${encodeURIComponent(
+      id
+    )}?key=${encodeURIComponent(this.apiKey)}`;
   }
 
-  private docRef(name: 'accounts' | 'transactions' | 'loans' | 'repayments', id: string) {
-    return doc(this.db, 'koperasi', this.workspaceId, name, id);
+  private queryUrl(): string {
+    return `${this.baseUrl}/koperasi/${this.workspaceId}:runQuery?key=${encodeURIComponent(
+      this.apiKey
+    )}`;
+  }
+
+  private async listCollection<T>(col: CollectionName): Promise<T[]> {
+    const res = await fetch(this.queryUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: col }],
+        },
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Firestore query (${col}) gagal [${res.status}]: ${errText}`);
+    }
+    const items = (await res.json()) as Array<{
+      document?: { fields?: Record<string, FirestoreValue> };
+    }>;
+    const result: T[] = [];
+    for (const item of items) {
+      if (item.document?.fields) {
+        result.push(decodeFields<T>(item.document.fields));
+      }
+    }
+    return result;
+  }
+
+  private async getDocument<T>(col: CollectionName, id: string): Promise<T | null> {
+    const res = await fetch(this.docUrl(col, id));
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Firestore get (${col}/${id}) gagal [${res.status}]: ${errText}`);
+    }
+    const data = (await res.json()) as { fields?: Record<string, FirestoreValue> };
+    return data.fields ? decodeFields<T>(data.fields) : null;
+  }
+
+  private async putDocument(
+    col: CollectionName,
+    id: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const res = await fetch(this.docUrl(col, id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: encodeFields(payload) }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Firestore save (${col}/${id}) gagal [${res.status}]: ${errText}`);
+    }
+  }
+
+  private async deleteDocument(col: CollectionName, id: string): Promise<void> {
+    const res = await fetch(this.docUrl(col, id), { method: 'DELETE' });
+    if (res.status === 404) return;
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Firestore delete (${col}/${id}) gagal [${res.status}]: ${errText}`);
+    }
   }
 
   async init(): Promise<void> {
-    if (!this.initializedPromise) {
-      this.initializedPromise = this.bootstrap();
-    }
-    return this.initializedPromise;
-  }
-
-  private async bootstrap(): Promise<void> {
-    const snap = await getDocs(this.col('accounts'));
-    if (snap.empty) {
+    if (this.initialized) return;
+    const accounts = await this.listCollection<StaffAccount>('accounts');
+    if (accounts.length === 0) {
       const admin = createDefaultAdmin();
-      await setDoc(this.docRef('accounts', admin.id), stripUndefined({ ...admin }));
+      await this.putDocument('accounts', admin.id, stripUndefined({ ...admin }));
     }
+    this.initialized = true;
   }
 
   async getAccounts(includePin = false): Promise<StaffAccount[]> {
     await this.init();
-    const snap = await getDocs(this.col('accounts'));
-    const list = snap.docs.map((d) => d.data() as StaffAccount);
+    const list = await this.listCollection<StaffAccount>('accounts');
     list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
     return includePin ? list : list.map(sanitizeAccount);
   }
 
   async findAccountById(id: string): Promise<StaffAccount | null> {
     await this.init();
-    const snap = await getDoc(this.docRef('accounts', id));
-    if (!snap.exists()) return null;
-    return snap.data() as StaffAccount;
+    return this.getDocument<StaffAccount>('accounts', id);
   }
 
   async createAccount(account: StaffAccount): Promise<StaffAccount> {
@@ -168,7 +249,7 @@ class FirestoreStorage implements StorageAdapter {
       active: account.active !== false,
       createdAt: account.createdAt,
     };
-    await setDoc(this.docRef('accounts', payload.id), payload);
+    await this.putDocument('accounts', payload.id, stripUndefined({ ...payload }));
     return sanitizeAccount(payload);
   }
 
@@ -184,12 +265,7 @@ class FirestoreStorage implements StorageAdapter {
       active: patch.active ?? existing.active,
       createdAt: existing.createdAt,
     };
-    await updateDoc(this.docRef('accounts', id), {
-      name: next.name,
-      role: next.role,
-      pin: next.pin,
-      active: next.active,
-    });
+    await this.putDocument('accounts', id, stripUndefined({ ...next }));
     return sanitizeAccount(next);
   }
 
@@ -197,34 +273,29 @@ class FirestoreStorage implements StorageAdapter {
     await this.init();
     const existing = await this.findAccountById(id);
     if (!existing) return false;
-    await deleteDoc(this.docRef('accounts', id));
+    await this.deleteDocument('accounts', id);
     return true;
   }
 
   async getFullDatabase(includePins = false): Promise<KoperasiDatabase> {
     await this.init();
-    const [accSnap, txSnap, loanSnap, repSnap] = await Promise.all([
-      getDocs(this.col('accounts')),
-      getDocs(this.col('transactions')),
-      getDocs(this.col('loans')),
-      getDocs(this.col('repayments')),
+    const [accounts, transactions, loans, repayments] = await Promise.all([
+      this.listCollection<StaffAccount>('accounts'),
+      this.listCollection<CashTransaction>('transactions'),
+      this.listCollection<Loan>('loans'),
+      this.listCollection<Repayment>('repayments'),
     ]);
 
-    const accounts = accSnap.docs
-      .map((d) => d.data() as StaffAccount)
-      .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
-
-    const transactions = txSnap.docs
-      .map((d) => d.data() as CashTransaction)
-      .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
-
-    const loans = loanSnap.docs
-      .map((d) => d.data() as Loan)
-      .sort((a, b) => a.loanDate.localeCompare(b.loanDate) || a.createdAt.localeCompare(b.createdAt));
-
-    const repayments = repSnap.docs
-      .map((d) => d.data() as Repayment)
-      .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+    accounts.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+    transactions.sort(
+      (a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt)
+    );
+    loans.sort(
+      (a, b) => a.loanDate.localeCompare(b.loanDate) || a.createdAt.localeCompare(b.createdAt)
+    );
+    repayments.sort(
+      (a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt)
+    );
 
     return {
       version: 1,
@@ -243,7 +314,7 @@ class FirestoreStorage implements StorageAdapter {
       amount: Math.round(tx.amount),
       description: tx.description || '',
     });
-    await setDoc(this.docRef('transactions', clean.id), clean);
+    await this.putDocument('transactions', clean.id, clean);
     return clean;
   }
 
@@ -252,10 +323,8 @@ class FirestoreStorage implements StorageAdapter {
     patch: Partial<CashTransaction>
   ): Promise<CashTransaction | null> {
     await this.init();
-    const ref = this.docRef('transactions', id);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return null;
-    const prev = snap.data() as CashTransaction;
+    const prev = await this.getDocument<CashTransaction>('transactions', id);
+    if (!prev) return null;
     const next = stripUndefined({
       ...prev,
       ...patch,
@@ -266,13 +335,13 @@ class FirestoreStorage implements StorageAdapter {
       description: patch.description ?? prev.description ?? '',
       updatedAt: new Date().toISOString(),
     });
-    await setDoc(ref, next);
+    await this.putDocument('transactions', id, next);
     return next;
   }
 
   async deleteTransaction(id: string): Promise<void> {
     await this.init();
-    await deleteDoc(this.docRef('transactions', id));
+    await this.deleteDocument('transactions', id);
   }
 
   async createLoan(loan: Loan): Promise<Loan> {
@@ -286,16 +355,14 @@ class FirestoreStorage implements StorageAdapter {
       totalAmount: Math.round(loan.totalAmount),
       description: loan.description || '',
     });
-    await setDoc(this.docRef('loans', clean.id), clean);
+    await this.putDocument('loans', clean.id, clean);
     return clean;
   }
 
   async updateLoan(id: string, patch: Partial<Loan>): Promise<Loan | null> {
     await this.init();
-    const ref = this.docRef('loans', id);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return null;
-    const prev = snap.data() as Loan;
+    const prev = await this.getDocument<Loan>('loans', id);
+    if (!prev) return null;
     const next = stripUndefined({
       ...prev,
       ...patch,
@@ -310,22 +377,17 @@ class FirestoreStorage implements StorageAdapter {
       description: patch.description ?? prev.description ?? '',
       updatedAt: new Date().toISOString(),
     });
-    await setDoc(ref, next);
+    await this.putDocument('loans', id, next);
     return next;
   }
 
   async deleteLoan(id: string): Promise<void> {
     await this.init();
-    const repSnap = await getDocs(this.col('repayments'));
-    const batch = writeBatch(this.db);
-    for (const d of repSnap.docs) {
-      const rep = d.data() as Repayment;
-      if (rep.loanId === id) {
-        batch.delete(d.ref);
-      }
-    }
-    batch.delete(this.docRef('loans', id));
-    await batch.commit();
+    const repayments = await this.listCollection<Repayment>('repayments');
+    await Promise.all(
+      repayments.filter((r) => r.loanId === id).map((r) => this.deleteDocument('repayments', r.id))
+    );
+    await this.deleteDocument('loans', id);
   }
 
   async createRepayment(rep: Repayment): Promise<Repayment> {
@@ -335,25 +397,18 @@ class FirestoreStorage implements StorageAdapter {
       amount: Math.round(rep.amount),
       notes: rep.notes || '',
     });
-    await setDoc(this.docRef('repayments', clean.id), clean);
+    await this.putDocument('repayments', clean.id, clean);
     return clean;
   }
 
   async deleteRepayment(id: string): Promise<void> {
     await this.init();
-    await deleteDoc(this.docRef('repayments', id));
+    await this.deleteDocument('repayments', id);
   }
 
-  private async clearCollection(name: 'accounts' | 'transactions' | 'loans' | 'repayments') {
-    const snap = await getDocs(this.col(name));
-    const docs = snap.docs;
-    for (let i = 0; i < docs.length; i += 400) {
-      const batch = writeBatch(this.db);
-      for (const d of docs.slice(i, i + 400)) {
-        batch.delete(d.ref);
-      }
-      await batch.commit();
-    }
+  private async clearCollection(col: CollectionName): Promise<void> {
+    const items = await this.listCollection<{ id: string }>(col);
+    await Promise.all(items.map((item) => this.deleteDocument(col, item.id)));
   }
 
   async restoreDatabase(db: KoperasiDatabase): Promise<void> {
@@ -376,7 +431,7 @@ class FirestoreStorage implements StorageAdapter {
           active: acc.active !== false,
           createdAt: acc.createdAt || new Date().toISOString(),
         };
-        await setDoc(this.docRef('accounts', cleanAcc.id), cleanAcc);
+        await this.putDocument('accounts', cleanAcc.id, stripUndefined({ ...cleanAcc }));
       }
     }
 
@@ -400,395 +455,7 @@ class FirestoreStorage implements StorageAdapter {
 }
 
 // ============================================================================
-// 2. PostgreSQL Storage Adapter (Optional via DATABASE_URL)
-// ============================================================================
-class PostgresStorage implements StorageAdapter {
-  readonly mode = 'postgres' as const;
-  private pool: Pool;
-  private initializedPromise: Promise<void> | null = null;
-
-  constructor(connectionString: string) {
-    const isLocal =
-      connectionString.includes('localhost') || connectionString.includes('127.0.0.1');
-    this.pool = new Pool({
-      connectionString,
-      ssl: isLocal ? false : { rejectUnauthorized: false },
-      max: 10,
-    });
-  }
-
-  async init(): Promise<void> {
-    if (!this.initializedPromise) {
-      this.initializedPromise = this.bootstrapSchema();
-    }
-    return this.initializedPromise;
-  }
-
-  private async bootstrapSchema(): Promise<void> {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS koperasi_accounts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        role TEXT NOT NULL,
-        pin_hash TEXT NOT NULL,
-        active BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS koperasi_transactions (
-        id TEXT PRIMARY KEY,
-        tx_number TEXT NOT NULL,
-        type TEXT NOT NULL,
-        date TEXT NOT NULL,
-        category TEXT NOT NULL,
-        amount BIGINT NOT NULL,
-        party_name TEXT NOT NULL,
-        payment_method TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        attachment_json JSONB,
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS koperasi_loans (
-        id TEXT PRIMARY KEY,
-        tx_number TEXT NOT NULL,
-        borrower_name TEXT NOT NULL,
-        member_id TEXT NOT NULL DEFAULT '',
-        phone TEXT NOT NULL DEFAULT '',
-        loan_date TEXT NOT NULL,
-        due_date TEXT NOT NULL,
-        principal_amount BIGINT NOT NULL,
-        interest_amount BIGINT NOT NULL DEFAULT 0,
-        total_amount BIGINT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        attachment_json JSONB,
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS koperasi_repayments (
-        id TEXT PRIMARY KEY,
-        tx_number TEXT NOT NULL,
-        loan_id TEXT NOT NULL REFERENCES koperasi_loans(id) ON DELETE CASCADE,
-        loan_tx_number TEXT NOT NULL,
-        date TEXT NOT NULL,
-        amount BIGINT NOT NULL,
-        payment_method TEXT NOT NULL,
-        notes TEXT NOT NULL DEFAULT '',
-        attachment_json JSONB,
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL
-      );
-    `);
-
-    const countRes = await this.pool.query<{ count: string }>(
-      'SELECT COUNT(*)::text AS count FROM koperasi_accounts'
-    );
-    if (Number(countRes.rows[0]?.count || 0) === 0) {
-      const admin = createDefaultAdmin();
-      await this.pool.query(
-        `INSERT INTO koperasi_accounts (id, name, role, pin_hash, active, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [admin.id, admin.name, admin.role, admin.pin, admin.active, admin.createdAt]
-      );
-    }
-  }
-
-  private mapAccount(row: Record<string, unknown>, includePin: boolean): StaffAccount {
-    const acc: StaffAccount = {
-      id: String(row.id),
-      name: String(row.name),
-      role: row.role === 'Admin' ? 'Admin' : 'Staf',
-      active: Boolean(row.active),
-      createdAt: String(row.created_at),
-    };
-    if (includePin) acc.pin = String(row.pin_hash);
-    return acc;
-  }
-
-  private mapTransaction(row: Record<string, unknown>): CashTransaction {
-    return {
-      id: String(row.id),
-      txNumber: String(row.tx_number),
-      type: row.type === 'keluar' ? 'keluar' : 'masuk',
-      date: String(row.date),
-      category: String(row.category),
-      amount: Number(row.amount),
-      partyName: String(row.party_name),
-      paymentMethod: row.payment_method === 'Transfer Bank' ? 'Transfer Bank' : 'Tunai',
-      description: String(row.description || ''),
-      attachment: (row.attachment_json as Attachment | null) || undefined,
-      createdBy: String(row.created_by),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    };
-  }
-
-  private mapLoan(row: Record<string, unknown>): Loan {
-    return {
-      id: String(row.id),
-      txNumber: String(row.tx_number),
-      borrowerName: String(row.borrower_name),
-      memberId: String(row.member_id || ''),
-      phone: String(row.phone || ''),
-      loanDate: String(row.loan_date),
-      dueDate: String(row.due_date),
-      principalAmount: Number(row.principal_amount),
-      interestAmount: Number(row.interest_amount),
-      totalAmount: Number(row.total_amount),
-      description: String(row.description || ''),
-      attachment: (row.attachment_json as Attachment | null) || undefined,
-      createdBy: String(row.created_by),
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-    };
-  }
-
-  private mapRepayment(row: Record<string, unknown>): Repayment {
-    return {
-      id: String(row.id),
-      txNumber: String(row.tx_number),
-      loanId: String(row.loan_id),
-      loanTxNumber: String(row.loan_tx_number),
-      date: String(row.date),
-      amount: Number(row.amount),
-      paymentMethod: row.payment_method === 'Transfer Bank' ? 'Transfer Bank' : 'Tunai',
-      notes: String(row.notes || ''),
-      attachment: (row.attachment_json as Attachment | null) || undefined,
-      createdBy: String(row.created_by),
-      createdAt: String(row.created_at),
-    };
-  }
-
-  async getAccounts(includePin = false): Promise<StaffAccount[]> {
-    await this.init();
-    const res = await this.pool.query('SELECT * FROM koperasi_accounts ORDER BY created_at ASC');
-    return res.rows.map((r) => this.mapAccount(r, includePin));
-  }
-
-  async findAccountById(id: string): Promise<StaffAccount | null> {
-    await this.init();
-    const res = await this.pool.query('SELECT * FROM koperasi_accounts WHERE id = $1', [id]);
-    if (res.rows.length === 0) return null;
-    return this.mapAccount(res.rows[0], true);
-  }
-
-  async createAccount(account: StaffAccount): Promise<StaffAccount> {
-    await this.init();
-    await this.pool.query(
-      `INSERT INTO koperasi_accounts (id, name, role, pin_hash, active, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        account.id,
-        account.name,
-        account.role,
-        account.pin || hashPin('1234'),
-        account.active,
-        account.createdAt,
-      ]
-    );
-    return sanitizeAccount(account);
-  }
-
-  async updateAccount(id: string, patch: Partial<StaffAccount>): Promise<StaffAccount | null> {
-    await this.init();
-    const existing = await this.findAccountById(id);
-    if (!existing) return null;
-    const nextName = patch.name ?? existing.name;
-    const nextRole = patch.role ?? existing.role;
-    const nextActive = patch.active ?? existing.active;
-    const nextPin = patch.pin ?? existing.pin!;
-    await this.pool.query(
-      `UPDATE koperasi_accounts SET name = $2, role = $3, active = $4, pin_hash = $5 WHERE id = $1`,
-      [id, nextName, nextRole, nextActive, nextPin]
-    );
-    return { id, name: nextName, role: nextRole, active: nextActive, createdAt: existing.createdAt };
-  }
-
-  async deleteAccount(id: string): Promise<boolean> {
-    await this.init();
-    const res = await this.pool.query('DELETE FROM koperasi_accounts WHERE id = $1', [id]);
-    return (res.rowCount || 0) > 0;
-  }
-
-  async getFullDatabase(includePins = false): Promise<KoperasiDatabase> {
-    await this.init();
-    const [accRes, txRes, loanRes, repRes] = await Promise.all([
-      this.pool.query('SELECT * FROM koperasi_accounts ORDER BY created_at ASC'),
-      this.pool.query('SELECT * FROM koperasi_transactions ORDER BY date ASC, created_at ASC'),
-      this.pool.query('SELECT * FROM koperasi_loans ORDER BY loan_date ASC, created_at ASC'),
-      this.pool.query('SELECT * FROM koperasi_repayments ORDER BY date ASC, created_at ASC'),
-    ]);
-    return {
-      version: 1,
-      lastModified: new Date().toISOString(),
-      accounts: accRes.rows.map((r) => this.mapAccount(r, includePins)),
-      transactions: txRes.rows.map((r) => this.mapTransaction(r)),
-      loans: loanRes.rows.map((r) => this.mapLoan(r)),
-      repayments: repRes.rows.map((r) => this.mapRepayment(r)),
-    };
-  }
-
-  async createTransaction(tx: CashTransaction): Promise<CashTransaction> {
-    await this.init();
-    await this.pool.query(
-      `INSERT INTO koperasi_transactions
-       (id, tx_number, type, date, category, amount, party_name, payment_method, description, attachment_json, created_by, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [
-        tx.id, tx.txNumber, tx.type, tx.date, tx.category, Math.round(tx.amount),
-        tx.partyName, tx.paymentMethod, tx.description || '',
-        tx.attachment ? JSON.stringify(tx.attachment) : null,
-        tx.createdBy, tx.createdAt, tx.updatedAt,
-      ]
-    );
-    return tx;
-  }
-
-  async updateTransaction(id: string, patch: Partial<CashTransaction>): Promise<CashTransaction | null> {
-    await this.init();
-    const cur = await this.pool.query('SELECT * FROM koperasi_transactions WHERE id = $1', [id]);
-    if (cur.rows.length === 0) return null;
-    const prev = this.mapTransaction(cur.rows[0]);
-    const next: CashTransaction = { ...prev, ...patch, id, updatedAt: new Date().toISOString() };
-    await this.pool.query(
-      `UPDATE koperasi_transactions
-       SET tx_number=$2, type=$3, date=$4, category=$5, amount=$6, party_name=$7, payment_method=$8, description=$9, attachment_json=$10, updated_at=$11
-       WHERE id=$1`,
-      [
-        id, next.txNumber, next.type, next.date, next.category, Math.round(next.amount),
-        next.partyName, next.paymentMethod, next.description || '',
-        next.attachment ? JSON.stringify(next.attachment) : null, next.updatedAt,
-      ]
-    );
-    return next;
-  }
-
-  async deleteTransaction(id: string): Promise<void> {
-    await this.init();
-    await this.pool.query('DELETE FROM koperasi_transactions WHERE id = $1', [id]);
-  }
-
-  async createLoan(loan: Loan): Promise<Loan> {
-    await this.init();
-    await this.pool.query(
-      `INSERT INTO koperasi_loans
-       (id, tx_number, borrower_name, member_id, phone, loan_date, due_date, principal_amount, interest_amount, total_amount, description, attachment_json, created_by, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      [
-        loan.id, loan.txNumber, loan.borrowerName, loan.memberId || '', loan.phone || '',
-        loan.loanDate, loan.dueDate, Math.round(loan.principalAmount), Math.round(loan.interestAmount || 0),
-        Math.round(loan.totalAmount), loan.description || '',
-        loan.attachment ? JSON.stringify(loan.attachment) : null,
-        loan.createdBy, loan.createdAt, loan.updatedAt,
-      ]
-    );
-    return loan;
-  }
-
-  async updateLoan(id: string, patch: Partial<Loan>): Promise<Loan | null> {
-    await this.init();
-    const cur = await this.pool.query('SELECT * FROM koperasi_loans WHERE id = $1', [id]);
-    if (cur.rows.length === 0) return null;
-    const prev = this.mapLoan(cur.rows[0]);
-    const next: Loan = { ...prev, ...patch, id, updatedAt: new Date().toISOString() };
-    await this.pool.query(
-      `UPDATE koperasi_loans
-       SET tx_number=$2, borrower_name=$3, member_id=$4, phone=$5, loan_date=$6, due_date=$7, principal_amount=$8, interest_amount=$9, total_amount=$10, description=$11, attachment_json=$12, updated_at=$13
-       WHERE id=$1`,
-      [
-        id, next.txNumber, next.borrowerName, next.memberId || '', next.phone || '',
-        next.loanDate, next.dueDate, Math.round(next.principalAmount), Math.round(next.interestAmount || 0),
-        Math.round(next.totalAmount), next.description || '',
-        next.attachment ? JSON.stringify(next.attachment) : null, next.updatedAt,
-      ]
-    );
-    return next;
-  }
-
-  async deleteLoan(id: string): Promise<void> {
-    await this.init();
-    await this.pool.query('DELETE FROM koperasi_loans WHERE id = $1', [id]);
-  }
-
-  async createRepayment(rep: Repayment): Promise<Repayment> {
-    await this.init();
-    await this.pool.query(
-      `INSERT INTO koperasi_repayments
-       (id, tx_number, loan_id, loan_tx_number, date, amount, payment_method, notes, attachment_json, created_by, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [
-        rep.id, rep.txNumber, rep.loanId, rep.loanTxNumber, rep.date, Math.round(rep.amount),
-        rep.paymentMethod, rep.notes || '', rep.attachment ? JSON.stringify(rep.attachment) : null,
-        rep.createdBy, rep.createdAt,
-      ]
-    );
-    return rep;
-  }
-
-  async deleteRepayment(id: string): Promise<void> {
-    await this.init();
-    await this.pool.query('DELETE FROM koperasi_repayments WHERE id = $1', [id]);
-  }
-
-  async restoreDatabase(db: KoperasiDatabase): Promise<void> {
-    await this.init();
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM koperasi_repayments');
-      await client.query('DELETE FROM koperasi_loans');
-      await client.query('DELETE FROM koperasi_transactions');
-      if (Array.isArray(db.accounts) && db.accounts.length > 0) {
-        await client.query('DELETE FROM koperasi_accounts');
-        for (const acc of db.accounts) {
-          const pinValue = acc.pin && acc.pin.startsWith('scrypt:') ? acc.pin : hashPin(acc.pin || '1234');
-          await client.query(
-            `INSERT INTO koperasi_accounts (id, name, role, pin_hash, active, created_at) VALUES ($1,$2,$3,$4,$5,$6)`,
-            [acc.id, acc.name, acc.role === 'Admin' ? 'Admin' : 'Staf', pinValue, acc.active !== false, acc.createdAt || new Date().toISOString()]
-          );
-        }
-      }
-      for (const tx of db.transactions) {
-        await client.query(
-          `INSERT INTO koperasi_transactions (id, tx_number, type, date, category, amount, party_name, payment_method, description, attachment_json, created_by, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [tx.id, tx.txNumber, tx.type, tx.date, tx.category, Math.round(tx.amount), tx.partyName, tx.paymentMethod, tx.description || '', tx.attachment ? JSON.stringify(tx.attachment) : null, tx.createdBy, tx.createdAt, tx.updatedAt]
-        );
-      }
-      for (const loan of db.loans) {
-        await client.query(
-          `INSERT INTO koperasi_loans (id, tx_number, borrower_name, member_id, phone, loan_date, due_date, principal_amount, interest_amount, total_amount, description, attachment_json, created_by, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-          [loan.id, loan.txNumber, loan.borrowerName, loan.memberId || '', loan.phone || '', loan.loanDate, loan.dueDate, Math.round(loan.principalAmount), Math.round(loan.interestAmount || 0), Math.round(loan.totalAmount), loan.description || '', loan.attachment ? JSON.stringify(loan.attachment) : null, loan.createdBy, loan.createdAt, loan.updatedAt]
-        );
-      }
-      for (const rep of db.repayments) {
-        await client.query(
-          `INSERT INTO koperasi_repayments (id, tx_number, loan_id, loan_tx_number, date, amount, payment_method, notes, attachment_json, created_by, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [rep.id, rep.txNumber, rep.loanId, rep.loanTxNumber, rep.date, Math.round(rep.amount), rep.paymentMethod, rep.notes || '', rep.attachment ? JSON.stringify(rep.attachment) : null, rep.createdBy, rep.createdAt]
-        );
-      }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
-  async resetLedger(): Promise<void> {
-    await this.init();
-    await this.pool.query('DELETE FROM koperasi_repayments');
-    await this.pool.query('DELETE FROM koperasi_loans');
-    await this.pool.query('DELETE FROM koperasi_transactions');
-  }
-}
-
-// ============================================================================
-// 3. Local JSON File Storage Adapter (Local fallback)
+// 2. Local JSON File Fallback (Only if firebase config unavailable locally)
 // ============================================================================
 class JsonFileStorage implements StorageAdapter {
   readonly mode = 'json-file' as const;
@@ -809,32 +476,19 @@ class JsonFileStorage implements StorageAdapter {
       fs.writeFileSync(this.dbFile, JSON.stringify(initial, null, 2), 'utf-8');
       return initial;
     }
-    try {
-      const raw = fs.readFileSync(this.dbFile, 'utf-8');
-      const parsed = JSON.parse(raw) as KoperasiDatabase;
-      return {
-        version: parsed.version || 1,
-        lastModified: parsed.lastModified || new Date().toISOString(),
-        accounts:
-          Array.isArray(parsed.accounts) && parsed.accounts.length > 0
-            ? parsed.accounts
-            : [createDefaultAdmin()],
-        transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
-        loans: Array.isArray(parsed.loans) ? parsed.loans : [],
-        repayments: Array.isArray(parsed.repayments) ? parsed.repayments : [],
-      };
-    } catch {
-      const initial: KoperasiDatabase = {
-        version: 1,
-        lastModified: new Date().toISOString(),
-        accounts: [createDefaultAdmin()],
-        transactions: [],
-        loans: [],
-        repayments: [],
-      };
-      this.writeSync(initial);
-      return initial;
-    }
+    const raw = fs.readFileSync(this.dbFile, 'utf-8');
+    const parsed = JSON.parse(raw) as KoperasiDatabase;
+    return {
+      version: parsed.version || 1,
+      lastModified: parsed.lastModified || new Date().toISOString(),
+      accounts:
+        Array.isArray(parsed.accounts) && parsed.accounts.length > 0
+          ? parsed.accounts
+          : [createDefaultAdmin()],
+      transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+      loans: Array.isArray(parsed.loans) ? parsed.loans : [],
+      repayments: Array.isArray(parsed.repayments) ? parsed.repayments : [],
+    };
   }
 
   private writeSync(db: KoperasiDatabase): KoperasiDatabase {
@@ -958,15 +612,13 @@ let cachedAdapter: StorageAdapter | null = null;
 export function getStorage(): StorageAdapter {
   if (cachedAdapter) return cachedAdapter;
 
-  const fbConfig = loadFirebaseConfig();
-  if (fbConfig) {
-    cachedAdapter = new FirestoreStorage(fbConfig);
-    return cachedAdapter;
-  }
-
-  const pgUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-  if (pgUrl && pgUrl.trim().length > 0) {
-    cachedAdapter = new PostgresStorage(pgUrl.trim());
+  if (
+    firebaseConfig &&
+    firebaseConfig.projectId &&
+    firebaseConfig.projectId !== 'remixed-project-id' &&
+    firebaseConfig.firestoreDatabaseId
+  ) {
+    cachedAdapter = new FirestoreRestStorage(firebaseConfig);
     return cachedAdapter;
   }
 
