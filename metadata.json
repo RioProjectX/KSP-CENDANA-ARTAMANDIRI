@@ -1,0 +1,6 @@
+{
+  "name": "KSP Cendana Artha Mandiri",
+  "description": "Aplikasi Manajemen Keuangan & Simpan Pinjam Koperasi Simpan Pinjam Cendana Artha Mandiri.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

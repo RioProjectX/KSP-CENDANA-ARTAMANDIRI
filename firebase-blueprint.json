@@ -1,0 +1,294 @@
+{
+  "entities": {
+    "StaffAccount": {
+      "title": "StaffAccount",
+      "description": "Akun pengurus Admin atau Staf koperasi yang masuk menggunakan PIN terenkripsi.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["Admin", "Staf"]
+        },
+        "pin": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 256
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "name", "role", "pin", "active", "createdAt"]
+    },
+    "CashTransaction": {
+      "title": "CashTransaction",
+      "description": "Catatan transaksi uang masuk dan uang keluar kas koperasi.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "txNumber": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "type": {
+          "type": "string",
+          "enum": ["masuk", "keluar"]
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "amount": {
+          "type": "number"
+        },
+        "partyName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["Tunai", "Transfer Bank"]
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "attachment": {
+          "type": "object",
+          "description": "Lampiran opsional bukti foto atau PDF"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "txNumber",
+        "type",
+        "date",
+        "category",
+        "amount",
+        "partyName",
+        "paymentMethod",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Loan": {
+      "title": "Loan",
+      "description": "Data pencairan pinjaman anggota beserta tanggal jatuh tempo dan nominal tagihan.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "txNumber": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "borrowerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "memberId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "loanDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "dueDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "principalAmount": {
+          "type": "number"
+        },
+        "interestAmount": {
+          "type": "number"
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "attachment": {
+          "type": "object",
+          "description": "Lampiran opsional akad atau identitas peminjam"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "txNumber",
+        "borrowerName",
+        "loanDate",
+        "dueDate",
+        "principalAmount",
+        "interestAmount",
+        "totalAmount",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Repayment": {
+      "title": "Repayment",
+      "description": "Catatan cicilan atau pelunasan pengembalian dana pinjaman anggota.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "txNumber": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "loanId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "loanTxNumber": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "amount": {
+          "type": "number"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["Tunai", "Transfer Bank"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "attachment": {
+          "type": "object",
+          "description": "Lampiran opsional bukti pembayaran"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "txNumber",
+        "loanId",
+        "loanTxNumber",
+        "date",
+        "amount",
+        "paymentMethod",
+        "createdBy",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/koperasi/{workspaceId}/accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/StaffAccount" },
+      "description": "Daftar akun Admin dan Staf KSP Cendana Artha Mandiri."
+    },
+    "/koperasi/{workspaceId}/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/CashTransaction" },
+      "description": "Buku kas uang masuk dan uang keluar."
+    },
+    "/koperasi/{workspaceId}/loans/{loanId}": {
+      "schema": { "$ref": "#/entities/Loan" },
+      "description": "Daftar pinjaman anggota KSP Cendana Artha Mandiri."
+    },
+    "/koperasi/{workspaceId}/repayments/{repaymentId}": {
+      "schema": { "$ref": "#/entities/Repayment" },
+      "description": "Riwayat pembayaran cicilan dan pelunasan pinjaman."
+    }
+  }
+}

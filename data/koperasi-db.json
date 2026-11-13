@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "lastModified": "2026-11-13T14:31:31.741Z",
+  "accounts": [
+    {
+      "id": "admin-utama",
+      "name": "Administrator Utama",
+      "role": "Admin",
+      "pin": "scrypt:7a9a0375537f251105320a23a9548034:75d5fecc094706be7b518bba87ec5ebaa5712964b8a71442efdcef57ae2e4232",
+      "active": true,
+      "createdAt": "2026-11-13T12:20:05.379Z"
+    }
+  ],
+  "transactions": [],
+  "loans": [],
+  "repayments": []
+}

@@ -1,0 +1,197 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything not explicitly permitted
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidWorkspaceId(workspaceId) {
+      return isValidId(workspaceId) && workspaceId.size() >= 20;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidAttachment(att) {
+      return att is map
+        && att.keys().hasAll(['id', 'name', 'mimeType', 'size', 'dataUrl'])
+        && att.keys().hasOnly(['id', 'name', 'mimeType', 'size', 'dataUrl'])
+        && att.id is string && att.id.size() >= 2 && att.id.size() <= 128
+        && att.name is string && att.name.size() >= 1 && att.name.size() <= 255
+        && att.mimeType is string && att.mimeType.size() >= 3 && att.mimeType.size() <= 100
+        && att.size is number && att.size >= 0 && att.size <= 900000
+        && att.dataUrl is string && att.dataUrl.size() >= 10 && att.dataUrl.size() <= 980000;
+    }
+
+    function isValidAccount(data, accountId) {
+      return data.keys().hasAll(['id', 'name', 'role', 'pin', 'active', 'createdAt'])
+        && data.keys().hasOnly(['id', 'name', 'role', 'pin', 'active', 'createdAt'])
+        && data.id == accountId
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.role in ['Admin', 'Staf']
+        && data.pin is string && data.pin.size() >= 4 && data.pin.size() <= 256
+        && data.active is bool
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64;
+    }
+
+    function isValidTransaction(data, txId) {
+      return data.keys().hasAll([
+          'id', 'txNumber', 'type', 'date', 'category', 'amount',
+          'partyName', 'paymentMethod', 'description', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'txNumber', 'type', 'date', 'category', 'amount',
+          'partyName', 'paymentMethod', 'description', 'attachment', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.id == txId
+        && isValidId(data.id)
+        && data.txNumber is string && data.txNumber.size() >= 3 && data.txNumber.size() <= 64
+        && data.type in ['masuk', 'keluar']
+        && data.date is string && data.date.size() == 10
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 120
+        && data.amount is number && data.amount > 0 && data.amount <= 1000000000000
+        && data.partyName is string && data.partyName.size() >= 1 && data.partyName.size() <= 160
+        && data.paymentMethod in ['Tunai', 'Transfer Bank']
+        && data.description is string && data.description.size() <= 1000
+        && (!('attachment' in data) || isValidAttachment(data.attachment))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 120
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidLoan(data, loanId) {
+      return data.keys().hasAll([
+          'id', 'txNumber', 'borrowerName', 'memberId', 'phone', 'loanDate', 'dueDate',
+          'principalAmount', 'interestAmount', 'totalAmount', 'description',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'txNumber', 'borrowerName', 'memberId', 'phone', 'loanDate', 'dueDate',
+          'principalAmount', 'interestAmount', 'totalAmount', 'description', 'attachment',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.id == loanId
+        && isValidId(data.id)
+        && data.txNumber is string && data.txNumber.size() >= 3 && data.txNumber.size() <= 64
+        && data.borrowerName is string && data.borrowerName.size() >= 1 && data.borrowerName.size() <= 160
+        && data.memberId is string && data.memberId.size() <= 64
+        && data.phone is string && data.phone.size() <= 40
+        && data.loanDate is string && data.loanDate.size() == 10
+        && data.dueDate is string && data.dueDate.size() == 10
+        && data.principalAmount is number && data.principalAmount > 0 && data.principalAmount <= 1000000000000
+        && data.interestAmount is number && data.interestAmount >= 0 && data.interestAmount <= 1000000000000
+        && data.totalAmount is number && data.totalAmount >= data.principalAmount && data.totalAmount <= 2000000000000
+        && data.description is string && data.description.size() <= 1000
+        && (!('attachment' in data) || isValidAttachment(data.attachment))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 120
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 64;
+    }
+
+    function isValidRepayment(data, repaymentId) {
+      return data.keys().hasAll([
+          'id', 'txNumber', 'loanId', 'loanTxNumber', 'date', 'amount',
+          'paymentMethod', 'notes', 'createdBy', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'txNumber', 'loanId', 'loanTxNumber', 'date', 'amount',
+          'paymentMethod', 'notes', 'attachment', 'createdBy', 'createdAt'
+        ])
+        && data.id == repaymentId
+        && isValidId(data.id)
+        && data.txNumber is string && data.txNumber.size() >= 3 && data.txNumber.size() <= 64
+        && isValidId(data.loanId)
+        && data.loanTxNumber is string && data.loanTxNumber.size() >= 3 && data.loanTxNumber.size() <= 64
+        && data.date is string && data.date.size() == 10
+        && data.amount is number && data.amount > 0 && data.amount <= 1000000000000
+        && data.paymentMethod in ['Tunai', 'Transfer Bank']
+        && data.notes is string && data.notes.size() <= 500
+        && (!('attachment' in data) || isValidAttachment(data.attachment))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 120
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64;
+    }
+
+    // Health connection check document
+    match /test/connection {
+      allow get: if request.time != null;
+    }
+
+    // Scoped Koperasi Workspace Collections
+    match /koperasi/{workspaceId} {
+      match /accounts/{accountId} {
+        allow get: if isValidWorkspaceId(workspaceId) && isValidId(accountId);
+        allow list: if isValidWorkspaceId(workspaceId);
+        allow create: if isValidWorkspaceId(workspaceId)
+          && isValidId(accountId)
+          && isValidAccount(incoming(), accountId);
+        allow update: if isValidWorkspaceId(workspaceId)
+          && isValidId(accountId)
+          && isValidAccount(incoming(), accountId)
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'pin', 'active']);
+        allow delete: if isValidWorkspaceId(workspaceId) && isValidId(accountId);
+      }
+
+      match /transactions/{transactionId} {
+        allow get: if isValidWorkspaceId(workspaceId) && isValidId(transactionId);
+        allow list: if isValidWorkspaceId(workspaceId);
+        allow create: if isValidWorkspaceId(workspaceId)
+          && isValidId(transactionId)
+          && isValidTransaction(incoming(), transactionId);
+        allow update: if isValidWorkspaceId(workspaceId)
+          && isValidId(transactionId)
+          && isValidTransaction(incoming(), transactionId)
+          && incoming().id == existing().id
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'txNumber', 'type', 'date', 'category', 'amount',
+            'partyName', 'paymentMethod', 'description', 'attachment', 'updatedAt'
+          ]);
+        allow delete: if isValidWorkspaceId(workspaceId) && isValidId(transactionId);
+      }
+
+      match /loans/{loanId} {
+        allow get: if isValidWorkspaceId(workspaceId) && isValidId(loanId);
+        allow list: if isValidWorkspaceId(workspaceId);
+        allow create: if isValidWorkspaceId(workspaceId)
+          && isValidId(loanId)
+          && isValidLoan(incoming(), loanId);
+        allow update: if isValidWorkspaceId(workspaceId)
+          && isValidId(loanId)
+          && isValidLoan(incoming(), loanId)
+          && incoming().id == existing().id
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'txNumber', 'borrowerName', 'memberId', 'phone', 'loanDate', 'dueDate',
+            'principalAmount', 'interestAmount', 'totalAmount', 'description', 'attachment', 'updatedAt'
+          ]);
+        allow delete: if isValidWorkspaceId(workspaceId) && isValidId(loanId);
+      }
+
+      match /repayments/{repaymentId} {
+        allow get: if isValidWorkspaceId(workspaceId) && isValidId(repaymentId);
+        allow list: if isValidWorkspaceId(workspaceId);
+        allow create: if isValidWorkspaceId(workspaceId)
+          && isValidId(repaymentId)
+          && isValidRepayment(incoming(), repaymentId)
+          && exists(/databases/$(database)/documents/koperasi/$(workspaceId)/loans/$(incoming().loanId));
+        allow delete: if isValidWorkspaceId(workspaceId) && isValidId(repaymentId);
+      }
+    }
+  }
+}
