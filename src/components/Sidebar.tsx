@@ -1,6 +1,7 @@
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  ClipboardCheck,
   FileSpreadsheet,
   HandCoins,
   LayoutDashboard,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react';
 import { ActivePage, StaffAccount } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { NotificationBellButton } from './NotificationCenter';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
@@ -20,6 +22,10 @@ interface SidebarProps {
   mobileOpen: boolean;
   onSetMobileOpen: (open: boolean) => void;
   dueAlertCount: number;
+  pendingVisitCount: number;
+  unreadNotifCount: number;
+  urgentNotifCount: number;
+  onOpenNotifications: () => void;
 }
 
 const NAV_ITEMS: {
@@ -30,6 +36,7 @@ const NAV_ITEMS: {
   { id: 'dashboard', label: 'Dashboard Utama', icon: LayoutDashboard },
   { id: 'uang-masuk', label: 'Uang Masuk', icon: ArrowDownLeft },
   { id: 'uang-keluar', label: 'Uang Keluar', icon: ArrowUpRight },
+  { id: 'calon-nasabah', label: 'Calon Nasabah & Visit', icon: ClipboardCheck },
   { id: 'pinjaman', label: 'Dana Sedang Dipinjam', icon: HandCoins },
   { id: 'pengembalian', label: 'Pengembalian Dana', icon: RotateCcw },
   { id: 'laporan', label: 'Laporan & Backup', icon: FileSpreadsheet },
@@ -43,6 +50,10 @@ export function Sidebar({
   mobileOpen,
   onSetMobileOpen,
   dueAlertCount,
+  pendingVisitCount,
+  unreadNotifCount,
+  urgentNotifCount,
+  onOpenNotifications,
 }: SidebarProps) {
   const handleSelect = (page: ActivePage) => {
     onNavigate(page);
@@ -102,6 +113,12 @@ export function Sidebar({
                 <span className="truncate">{item.label}</span>
               </span>
 
+              {item.id === 'calon-nasabah' && pendingVisitCount > 0 && (
+                <span className="shrink-0 rounded-md bg-[#C59B27] px-1.5 py-0.5 font-mono text-[11px] font-bold text-[#083320] tabular-nums">
+                  {pendingVisitCount}
+                </span>
+              )}
+
               {item.id === 'pinjaman' && dueAlertCount > 0 && (
                 <span className="shrink-0 rounded-md bg-[#C59B27] px-1.5 py-0.5 font-mono text-[11px] font-bold text-[#083320] tabular-nums">
                   {dueAlertCount}
@@ -158,8 +175,14 @@ export function Sidebar({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <PWAInstallButton />
+          <NotificationBellButton
+            variant="dark"
+            unreadCount={unreadNotifCount}
+            urgentCount={urgentNotifCount}
+            onClick={onOpenNotifications}
+          />
           <button
             type="button"
             onClick={() => handleSelect('akun')}

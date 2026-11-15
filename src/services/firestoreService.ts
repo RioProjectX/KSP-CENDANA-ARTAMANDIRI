@@ -12,13 +12,19 @@ import type {
   CashTransaction,
   KoperasiDatabase,
   Loan,
+  LoanApplication,
   Repayment,
   StaffAccount,
 } from '../types';
 
 const WORKSPACE_ID = 'ksp-cendana-artha-mandiri-prod-v1';
 
-type CollectionName = 'accounts' | 'transactions' | 'loans' | 'repayments';
+type CollectionName =
+  | 'accounts'
+  | 'transactions'
+  | 'loans'
+  | 'repayments'
+  | 'loanApplications';
 
 function colPath(name: CollectionName): string {
   return `koperasi/${WORKSPACE_ID}/${name}`;
@@ -75,17 +81,20 @@ export function subscribeKoperasiDatabase(
     transactions: CashTransaction[];
     loans: Loan[];
     repayments: Repayment[];
+    loanApplications: LoanApplication[];
     loaded: Record<CollectionName, boolean>;
   } = {
     accounts: [],
     transactions: [],
     loans: [],
     repayments: [],
+    loanApplications: [],
     loaded: {
       accounts: false,
       transactions: false,
       loans: false,
       repayments: false,
+      loanApplications: false,
     },
   };
 
@@ -96,7 +105,8 @@ export function subscribeKoperasiDatabase(
       state.loaded.accounts &&
       state.loaded.transactions &&
       state.loaded.loans &&
-      state.loaded.repayments
+      state.loaded.repayments &&
+      state.loaded.loanApplications
     ) {
       onData({
         version: 1,
@@ -105,6 +115,7 @@ export function subscribeKoperasiDatabase(
         transactions: state.transactions,
         loans: state.loans,
         repayments: state.repayments,
+        loanApplications: state.loanApplications,
       });
     }
   };
@@ -204,11 +215,34 @@ export function subscribeKoperasiDatabase(
     }
   );
 
+  const unsubLoanApplications = onSnapshot(
+    colRef('loanApplications'),
+    (snap) => {
+      state.loanApplications = snap.docs
+        .map((d) => d.data() as LoanApplication)
+        .sort(
+          (a, b) =>
+            (b.requestDate || '').localeCompare(a.requestDate || '') ||
+            (b.createdAt || '').localeCompare(a.createdAt || '')
+        );
+      state.loaded.loanApplications = true;
+      emitIfReady();
+    },
+    (err) => {
+      try {
+        handleFirestoreError(err, OperationType.LIST, colPath('loanApplications'));
+      } catch (wrapped) {
+        onError(wrapped instanceof Error ? wrapped : new Error(String(wrapped)));
+      }
+    }
+  );
+
   return () => {
     unsubAccounts();
     unsubTransactions();
     unsubLoans();
     unsubRepayments();
+    unsubLoanApplications();
   };
 }
 
@@ -271,12 +305,15 @@ export async function createLoanRecord(
 ): Promise<void> {
   const now = new Date().toISOString();
   const id = `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const principalAmount = Math.round(payload.principalAmount);
+  const adminFee = Math.min(principalAmount, Math.max(0, Math.round(payload.adminFee ?? 0)));
   const clean = stripUndefined({
     ...payload,
     id,
     memberId: payload.memberId || '',
     phone: payload.phone || '',
-    principalAmount: Math.round(payload.principalAmount),
+    principalAmount,
+    adminFee,
     interestAmount: Math.round(payload.interestAmount || 0),
     totalAmount: Math.round(payload.totalAmount),
     description: payload.description || '',
@@ -294,6 +331,8 @@ export async function updateLoanRecord(
   existing: Loan,
   patch: Omit<Loan, 'id' | 'createdAt' | 'updatedAt'>
 ): Promise<void> {
+  const principalAmount = Math.round(patch.principalAmount);
+  const adminFee = Math.min(principalAmount, Math.max(0, Math.round(patch.adminFee ?? 0)));
   const next = stripUndefined({
     ...patch,
     id: existing.id,
@@ -301,7 +340,8 @@ export async function updateLoanRecord(
     createdAt: existing.createdAt,
     memberId: patch.memberId || '',
     phone: patch.phone || '',
-    principalAmount: Math.round(patch.principalAmount),
+    principalAmount,
+    adminFee,
     interestAmount: Math.round(patch.interestAmount || 0),
     totalAmount: Math.round(patch.totalAmount),
     description: patch.description || '',
@@ -352,6 +392,135 @@ export async function removeRepaymentRecord(id: string): Promise<void> {
     await deleteDoc(docRef('repayments', id));
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `${colPath('repayments')}/${id}`);
+  }
+}
+
+// ============================================================================
+// Loan Applications (Calon Nasabah / Antrean Visit Lapangan & Finalisasi)
+// ============================================================================
+function sanitizeLoanApplicationFields(
+  payload: Omit<LoanApplication, 'id' | 'createdAt' | 'updatedAt'>
+) {
+  const visitDateClean =
+    payload.visitDate && payload.visitDate.trim().length === 10
+      ? payload.visitDate.trim().slice(0, 10)
+      : '';
+  return {
+    applicationNumber: payload.applicationNumber.trim().slice(0, 64),
+    applicantName: payload.applicantName.trim().slice(0, 160),
+    nik: (payload.nik || '').trim().slice(0, 64),
+    phone: (payload.phone || '').trim().slice(0, 40),
+    address: payload.address.trim().slice(0, 500),
+    occupation: (payload.occupation || '').trim().slice(0, 160),
+    requestDate: payload.requestDate.trim().slice(0, 10),
+    visitDate: visitDateClean,
+    requestedAmount: Math.max(1, Math.round(payload.requestedAmount)),
+    collateralNotes: (payload.collateralNotes || '').trim().slice(0, 1000),
+    visitSurveyNotes: (payload.visitSurveyNotes || '').trim().slice(0, 1000),
+    visitChecked: Boolean(payload.visitChecked),
+    status: payload.status,
+    surveyorName: (payload.surveyorName || '').trim().slice(0, 120),
+    disbursedLoanId: payload.disbursedLoanId ? payload.disbursedLoanId : undefined,
+    attachment: payload.attachment,
+    createdBy: payload.createdBy.trim().slice(0, 120),
+  };
+}
+
+export async function createLoanApplicationRecord(
+  payload: Omit<LoanApplication, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<void> {
+  const now = new Date().toISOString();
+  const id = `app-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const clean = stripUndefined({
+    ...sanitizeLoanApplicationFields(payload),
+    id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  try {
+    await setDoc(docRef('loanApplications', id), clean);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `${colPath('loanApplications')}/${id}`);
+  }
+}
+
+export async function updateLoanApplicationRecord(
+  existing: LoanApplication,
+  patch: Omit<LoanApplication, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<void> {
+  const next = stripUndefined({
+    ...sanitizeLoanApplicationFields(patch),
+    id: existing.id,
+    createdBy: existing.createdBy,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+  try {
+    await setDoc(docRef('loanApplications', existing.id), next);
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.UPDATE,
+      `${colPath('loanApplications')}/${existing.id}`
+    );
+  }
+}
+
+export async function removeLoanApplicationRecord(id: string): Promise<void> {
+  try {
+    await deleteDoc(docRef('loanApplications', id));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, `${colPath('loanApplications')}/${id}`);
+  }
+}
+
+export async function disburseLoanApplicationRecord(
+  application: LoanApplication,
+  loanPayload: Omit<Loan, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<void> {
+  const now = new Date().toISOString();
+  const loanId = `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const principalAmount = Math.round(loanPayload.principalAmount);
+  const adminFee = Math.min(principalAmount, Math.max(0, Math.round(loanPayload.adminFee ?? 0)));
+
+  const cleanLoan = stripUndefined({
+    ...loanPayload,
+    id: loanId,
+    memberId: loanPayload.memberId || '',
+    phone: loanPayload.phone || '',
+    principalAmount,
+    adminFee,
+    interestAmount: Math.round(loanPayload.interestAmount || 0),
+    totalAmount: Math.round(loanPayload.totalAmount),
+    description: loanPayload.description || '',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const cleanApplication = stripUndefined({
+    ...sanitizeLoanApplicationFields({
+      ...application,
+      visitChecked: true,
+      status: 'LOLOS',
+      disbursedLoanId: loanId,
+    }),
+    id: application.id,
+    createdBy: application.createdBy,
+    createdAt: application.createdAt,
+    updatedAt: now,
+  });
+
+  try {
+    const batch = writeBatch(firestoreDb);
+    batch.set(docRef('loans', loanId), cleanLoan);
+    batch.set(docRef('loanApplications', application.id), cleanApplication);
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(
+      err,
+      OperationType.WRITE,
+      `${colPath('loanApplications')}/${application.id}`
+    );
   }
 }
 
@@ -428,6 +597,7 @@ export async function restoreKoperasiDatabase(data: KoperasiDatabase): Promise<v
     await deleteAllInCollection('repayments');
     await deleteAllInCollection('loans');
     await deleteAllInCollection('transactions');
+    await deleteAllInCollection('loanApplications');
 
     if (Array.isArray(data.accounts) && data.accounts.length > 0) {
       await deleteAllInCollection('accounts');
@@ -454,11 +624,14 @@ export async function restoreKoperasiDatabase(data: KoperasiDatabase): Promise<v
     }
 
     for (const loan of data.loans) {
+      const principalAmount = Math.round(loan.principalAmount);
+      const adminFee = Math.min(principalAmount, Math.max(0, Math.round(loan.adminFee ?? 0)));
       const cleanLoan = stripUndefined({
         ...loan,
         memberId: loan.memberId || '',
         phone: loan.phone || '',
-        principalAmount: Math.round(loan.principalAmount),
+        principalAmount,
+        adminFee,
         interestAmount: Math.round(loan.interestAmount || 0),
         totalAmount: Math.round(loan.totalAmount),
         description: loan.description || '',
@@ -474,6 +647,16 @@ export async function restoreKoperasiDatabase(data: KoperasiDatabase): Promise<v
       });
       await setDoc(docRef('repayments', cleanRep.id), cleanRep);
     }
+
+    for (const app of data.loanApplications || []) {
+      const cleanApp = stripUndefined({
+        ...sanitizeLoanApplicationFields(app),
+        id: app.id,
+        createdAt: app.createdAt || new Date().toISOString(),
+        updatedAt: app.updatedAt || new Date().toISOString(),
+      });
+      await setDoc(docRef('loanApplications', cleanApp.id), cleanApp);
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `koperasi/${WORKSPACE_ID}`);
   }
@@ -484,6 +667,7 @@ export async function resetKoperasiLedger(): Promise<void> {
     await deleteAllInCollection('repayments');
     await deleteAllInCollection('loans');
     await deleteAllInCollection('transactions');
+    await deleteAllInCollection('loanApplications');
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `koperasi/${WORKSPACE_ID}`);
   }

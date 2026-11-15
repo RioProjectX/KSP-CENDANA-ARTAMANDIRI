@@ -4,7 +4,9 @@ import {
   ArrowDownLeft,
   ArrowRight,
   ArrowUpRight,
+  ClipboardCheck,
   HandCoins,
+  MapPin,
   Plus,
   RotateCcw,
 } from 'lucide-react';
@@ -45,6 +47,10 @@ export function DashboardView({
   const urgentLoans = computedLoans
     .filter((l) => l.status !== 'LUNAS' && l.dueReminderLevel !== 'aman')
     .sort((a, b) => a.daysUntilDue - b.daysUntilDue);
+
+  const pendingVisits = (db.loanApplications || []).filter(
+    (a) => a.status === 'MENUNGGU_VISIT' || a.status === 'MENUNGGU_FINALISASI'
+  );
 
   const cards = [
     {
@@ -115,6 +121,14 @@ export function DashboardView({
           </button>
           <button
             type="button"
+            onClick={() => onNavigate('calon-nasabah')}
+            className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-[#DCE4DE] bg-white px-3.5 py-2 text-xs font-semibold text-[#0F1F17] transition-colors hover:bg-[#F1F5F2] whitespace-nowrap"
+          >
+            <ClipboardCheck className="h-3.5 w-3.5 text-[#0D4A2E]" />
+            <span>Visit &amp; Calon Nasabah</span>
+          </button>
+          <button
+            type="button"
             onClick={() => onNavigate('pinjaman')}
             className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-[#C59B27] bg-[#FEF9E7] px-3.5 py-2 text-xs font-semibold text-[#7D5D0F] transition-colors hover:bg-[#FDF3CC] whitespace-nowrap"
           >
@@ -173,6 +187,70 @@ export function DashboardView({
           ))}
         </div>
       </section>
+
+      {/* Pending Field Visit & Finalization Queue */}
+      {pendingVisits.length > 0 && (
+        <section className="rounded-xl border border-blue-200 bg-[#F7FAFF] p-4 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2.5">
+              <MapPin className="h-5 w-5 shrink-0 text-[#0D4A2E]" />
+              <div>
+                <h2 className="font-display text-base font-bold text-[#0F1F17]">
+                  Antrean Visit Lapangan &amp; Finalisasi ({pendingVisits.length})
+                </h2>
+                <p className="text-xs text-[#5C6E63]">
+                  Calon nasabah yang perlu dicek lapangan atau menunggu keputusan Lolos / Tidak Lolos.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('calon-nasabah')}
+              className="flex min-h-[38px] items-center gap-1.5 self-start rounded-lg border border-[#DCE4DE] bg-white px-3 py-1.5 text-xs font-semibold text-[#0D4A2E] hover:bg-[#EFF5F1] whitespace-nowrap"
+            >
+              <span>Buka Daftar Visit</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="mt-4 divide-y divide-blue-100 rounded-lg border border-blue-200/80 bg-white">
+            {pendingVisits.slice(0, 4).map((app) => (
+              <div
+                key={app.id}
+                onClick={() => onNavigate('calon-nasabah')}
+                className="flex cursor-pointer flex-col gap-2 px-4 py-3 hover:bg-[#FAFBF9] sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-[#0F1F17]">
+                    <span>{app.applicantName}</span>
+                    <span className="font-mono text-xs font-normal text-[#5C6E63]">
+                      {app.applicationNumber}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-xs text-[#5C6E63]">
+                    {app.address} · Ajuan:{' '}
+                    <span className="font-semibold text-[#0F1F17] tabular-nums">
+                      {formatRupiah(app.requestedAmount)}
+                    </span>
+                  </p>
+                </div>
+
+                <span
+                  className={`inline-flex shrink-0 items-center self-start rounded-md px-2.5 py-1 text-xs font-semibold sm:self-center ${
+                    app.status === 'MENUNGGU_VISIT'
+                      ? 'bg-amber-50 text-amber-800 border border-amber-300'
+                      : 'bg-blue-50 text-blue-700 border border-blue-200'
+                  }`}
+                >
+                  {app.status === 'MENUNGGU_VISIT'
+                    ? 'Perlu Visit Lapangan'
+                    : 'Menunggu Finalisasi'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Urgent Due Date Reminders */}
       {urgentLoans.length > 0 && (

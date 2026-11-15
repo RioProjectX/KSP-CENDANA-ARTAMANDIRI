@@ -46,6 +46,7 @@ export interface Loan {
   loanDate: string; // YYYY-MM-DD
   dueDate: string; // YYYY-MM-DD
   principalAmount: number;
+  adminFee?: number;
   interestAmount: number;
   totalAmount: number;
   description: string;
@@ -69,6 +70,35 @@ export interface Repayment {
   createdAt: string;
 }
 
+export type LoanApplicationStatus =
+  | 'MENUNGGU_VISIT'
+  | 'MENUNGGU_FINALISASI'
+  | 'LOLOS'
+  | 'TIDAK_LOLOS';
+
+export interface LoanApplication {
+  id: string;
+  applicationNumber: string;
+  applicantName: string;
+  nik: string;
+  phone: string;
+  address: string;
+  occupation: string;
+  requestDate: string; // YYYY-MM-DD
+  visitDate: string; // YYYY-MM-DD or ''
+  requestedAmount: number;
+  collateralNotes: string;
+  visitSurveyNotes: string;
+  visitChecked: boolean;
+  status: LoanApplicationStatus;
+  surveyorName: string;
+  disbursedLoanId?: string;
+  attachment?: Attachment;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface KoperasiDatabase {
   version: number;
   lastModified: string;
@@ -76,6 +106,7 @@ export interface KoperasiDatabase {
   transactions: CashTransaction[];
   loans: Loan[];
   repayments: Repayment[];
+  loanApplications?: LoanApplication[];
 }
 
 export type LoanStatus = 'DIPINJAM' | 'DIBAYAR SEBAGIAN' | 'LUNAS' | 'TERLAMBAT';
@@ -123,6 +154,7 @@ export type ActivePage =
   | 'dashboard'
   | 'uang-masuk'
   | 'uang-keluar'
+  | 'calon-nasabah'
   | 'pinjaman'
   | 'pengembalian'
   | 'laporan'

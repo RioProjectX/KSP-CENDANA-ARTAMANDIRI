@@ -158,6 +158,10 @@
         "principalAmount": {
           "type": "number"
         },
+        "adminFee": {
+          "type": "number",
+          "description": "Potongan uang administrasi di awal pencairan (opsional)"
+        },
         "interestAmount": {
           "type": "number"
         },
@@ -271,6 +275,115 @@
         "createdBy",
         "createdAt"
       ]
+    },
+    "LoanApplication": {
+      "title": "LoanApplication",
+      "description": "Data calon nasabah pengajuan pinjaman untuk jadwal visit lapangan dan finalisasi lolos/tidak lolos.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "applicationNumber": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64
+        },
+        "applicantName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "nik": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "occupation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "requestDate": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10
+        },
+        "visitDate": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "requestedAmount": {
+          "type": "number"
+        },
+        "collateralNotes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "visitSurveyNotes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "visitChecked": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["MENUNGGU_VISIT", "MENUNGGU_FINALISASI", "LOLOS", "TIDAK_LOLOS"]
+        },
+        "surveyorName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "disbursedLoanId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "attachment": {
+          "type": "object",
+          "description": "Lampiran foto KTP, lokasi rumah/usaha, atau hasil survei lapangan"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        },
+        "updatedAt": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "applicationNumber",
+        "applicantName",
+        "address",
+        "requestDate",
+        "requestedAmount",
+        "visitChecked",
+        "status",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -289,6 +402,10 @@
     "/koperasi/{workspaceId}/repayments/{repaymentId}": {
       "schema": { "$ref": "#/entities/Repayment" },
       "description": "Riwayat pembayaran cicilan dan pelunasan pinjaman."
+    },
+    "/koperasi/{workspaceId}/loanApplications/{applicationId}": {
+      "schema": { "$ref": "#/entities/LoanApplication" },
+      "description": "Antrean pengajuan calon nasabah pinjaman untuk visit lapangan dan finalisasi."
     }
   }
 }

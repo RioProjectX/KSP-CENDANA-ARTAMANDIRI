@@ -83,7 +83,7 @@ export function diffCalendarDays(targetISO: string, fromISO: string = todayISO()
 }
 
 export function generateTxNumber(
-  prefix: 'KM' | 'KK' | 'PJ' | 'PB',
+  prefix: 'KM' | 'KK' | 'PJ' | 'PB' | 'PGJ',
   dateISO: string,
   existingNumbers: string[]
 ): string {
@@ -168,7 +168,10 @@ export function computeKoperasiMetrics(db: KoperasiDatabase): {
     else totalUangKeluar += tx.amount;
   }
 
-  const totalPokokDicairkan = db.loans.reduce((sum, l) => sum + l.principalAmount, 0);
+  const totalPokokDicairkan = db.loans.reduce(
+    (sum, l) => sum + Math.max(0, l.principalAmount - (l.adminFee || 0)),
+    0
+  );
   const totalDanaSudahKembali = db.repayments.reduce((sum, r) => sum + r.amount, 0);
   const totalDanaSedangDipinjam = computedLoans
     .filter((l) => l.status !== 'LUNAS')
@@ -225,9 +228,13 @@ export function computeKoperasiMetrics(db: KoperasiDatabase): {
       kind: 'Pencairan Pinjaman' as const,
       category: `Jatuh Tempo ${formatDateID(loan.dueDate)}`,
       party: loan.borrowerName,
-      description: loan.description || `Pinjaman ${loan.borrowerName}`,
+      description:
+        loan.description ||
+        (loan.adminFee && loan.adminFee > 0
+          ? `Pinjaman ${loan.borrowerName} (Pokok ${formatRupiah(loan.principalAmount)}, Admin ${formatRupiah(loan.adminFee)})`
+          : `Pinjaman ${loan.borrowerName}`),
       debit: 0,
-      credit: loan.principalAmount,
+      credit: Math.max(0, loan.principalAmount - (loan.adminFee || 0)),
       paymentMethod: 'Kas Koperasi',
       createdAt: loan.createdAt,
     })),
@@ -308,7 +315,7 @@ export function buildMonthlyChartSeries(db: KoperasiDatabase): MonthlyChartDatum
 
   for (const loan of db.loans) {
     const bucket = ensureMonth(loan.loanDate);
-    bucket.danaDipinjam += loan.principalAmount;
+    bucket.danaDipinjam += Math.max(0, loan.principalAmount - (loan.adminFee || 0));
   }
 
   for (const rep of db.repayments) {

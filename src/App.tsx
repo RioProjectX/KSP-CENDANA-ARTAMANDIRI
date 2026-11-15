@@ -5,16 +5,26 @@ import { AttachmentViewerModal } from './components/AttachmentViewerModal';
 import { CashTransactionsView } from './components/CashTransactionsView';
 import { DashboardView } from './components/DashboardView';
 import { LoansView } from './components/LoansView';
+import { LoanApplicationsView } from './components/LoanApplicationsView';
 import { RepaymentsView } from './components/RepaymentsView';
 import { ReportsBackupView } from './components/ReportsBackupView';
 import { Sidebar } from './components/Sidebar';
 import { WaveLoadingScreen } from './components/WaveLoadingScreen';
 import {
+  NotificationBellButton,
+  NotificationDrawer,
+  NotificationToastBanner,
+} from './components/NotificationCenter';
+import { useAppNotifications } from './hooks/useAppNotifications';
+import {
   createCashTransaction,
+  createLoanApplicationRecord,
   createLoanRecord,
   createRepaymentRecord,
   createStaffAccount,
+  disburseLoanApplicationRecord,
   removeCashTransaction,
+  removeLoanApplicationRecord,
   removeLoanRecord,
   removeRepaymentRecord,
   removeStaffAccount,
@@ -22,6 +32,7 @@ import {
   restoreKoperasiDatabase,
   subscribeKoperasiDatabase,
   updateCashTransaction,
+  updateLoanApplicationRecord,
   updateLoanRecord,
   updateStaffAccount,
 } from './services/firestoreService';
@@ -31,11 +42,12 @@ import {
   CashTransaction,
   KoperasiDatabase,
   Loan,
+  LoanApplication,
   Repayment,
   StaffAccount,
   UserRole,
 } from './types';
-import { computeKoperasiMetrics } from './utils/format';
+import { computeKoperasiMetrics, formatDateID, todayISO } from './utils/format';
 
 const FALLBACK_OPERATOR: StaffAccount = {
   id: 'admin-utama',
@@ -55,6 +67,7 @@ export default function App() {
     transactions: [],
     loans: [],
     repayments: [],
+    loanApplications: [],
   });
   const [dataReady, setDataReady] = useState<boolean>(false);
   const [showSplash, setShowSplash] = useState<boolean>(true);
@@ -69,6 +82,7 @@ export default function App() {
 
   const [activePage, setActivePage] = useState<ActivePage>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
+  const [notifOpen, setNotifOpen] = useState<boolean>(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | null>(null);
 
@@ -111,6 +125,14 @@ export default function App() {
     () => computeKoperasiMetrics(db),
     [db]
   );
+
+  const notif = useAppNotifications({
+    db,
+    computedLoans,
+    summary,
+    dataReady,
+    splashActive: showSplash,
+  });
 
   // Firestore CRUD Handlers
   const handleSaveTransaction = async (
@@ -165,6 +187,30 @@ export default function App() {
 
   const handleDeleteRepayment = async (id: string) => {
     await removeRepaymentRecord(id);
+  };
+
+  const handleCreateApplication = async (
+    payload: Omit<LoanApplication, 'id' | 'createdAt' | 'updatedAt'>
+  ) => {
+    await createLoanApplicationRecord(payload);
+  };
+
+  const handleUpdateApplication = async (
+    existing: LoanApplication,
+    payload: Omit<LoanApplication, 'id' | 'createdAt' | 'updatedAt'>
+  ) => {
+    await updateLoanApplicationRecord(existing, payload);
+  };
+
+  const handleDeleteApplication = async (id: string) => {
+    await removeLoanApplicationRecord(id);
+  };
+
+  const handleDisburseApplication = async (
+    application: LoanApplication,
+    loanPayload: Omit<Loan, 'id' | 'createdAt' | 'updatedAt'>
+  ) => {
+    await disburseLoanApplicationRecord(application, loanPayload);
   };
 
   const handleFetchBackup = async (): Promise<KoperasiDatabase> => {
@@ -225,6 +271,9 @@ export default function App() {
   };
 
   const dueAlertCount = summary.overdueLoanCount + summary.dueSoonLoanCount;
+  const pendingVisitCount = (db.loanApplications || []).filter(
+    (a) => a.status === 'MENUNGGU_VISIT' || a.status === 'MENUNGGU_FINALISASI'
+  ).length;
 
   return (
     <div className="min-h-screen bg-[#F6F8F6] text-[#0F1F17] flex flex-col lg:flex-row">
@@ -245,9 +294,40 @@ export default function App() {
         mobileOpen={mobileMenuOpen}
         onSetMobileOpen={setMobileMenuOpen}
         dueAlertCount={dueAlertCount}
+        pendingVisitCount={pendingVisitCount}
+        unreadNotifCount={notif.unreadCount}
+        urgentNotifCount={notif.urgentUnreadCount}
+        onOpenNotifications={() => setNotifOpen(true)}
       />
 
       <main className="flex-1 min-w-0">
+        {/* Desktop Top Utility Bar */}
+        <div className="no-print hidden lg:flex items-center justify-between border-b border-[#E5ECE7] bg-white/80 px-8 py-2.5 backdrop-blur-xs">
+          <p className="text-xs font-medium text-[#5C6E63]">
+            Tanggal Pembukuan:{' '}
+            <span className="font-mono font-semibold text-[#0F1F17]">
+              {formatDateID(todayISO())}
+            </span>
+          </p>
+          <div className="flex items-center gap-2.5">
+            {notif.permission === 'default' && (
+              <button
+                type="button"
+                onClick={() => void notif.requestDevicePermission()}
+                className="flex h-9 items-center rounded-lg border border-[#C59B27]/50 bg-[#FEF9E7] px-3 text-xs font-semibold text-[#7D5D0F] hover:bg-[#FDF3CC] transition-colors"
+              >
+                Aktifkan Notifikasi Perangkat
+              </button>
+            )}
+            <NotificationBellButton
+              variant="light"
+              unreadCount={notif.unreadCount}
+              urgentCount={notif.urgentUnreadCount}
+              onClick={() => setNotifOpen(true)}
+            />
+          </div>
+        </div>
+
         <div className="mx-auto w-full max-w-[1360px] px-4 py-6 sm:px-6 lg:px-8">
           {syncError && (
             <div
@@ -294,6 +374,21 @@ export default function App() {
                   onSaveTransaction={handleSaveTransaction}
                   onDeleteTransaction={handleDeleteTransaction}
                   onPreviewAttachment={setPreviewAttachment}
+                />
+              )}
+
+              {activePage === 'calon-nasabah' && (
+                <LoanApplicationsView
+                  applications={db.loanApplications || []}
+                  existingLoanNumbers={db.loans.map((l) => l.txNumber)}
+                  currentCashBalance={summary.saldoKasTersedia}
+                  currentUserName={currentUser.name}
+                  onCreateApplication={handleCreateApplication}
+                  onUpdateApplication={handleUpdateApplication}
+                  onDeleteApplication={handleDeleteApplication}
+                  onDisburseApplication={handleDisburseApplication}
+                  onPreviewAttachment={setPreviewAttachment}
+                  onGoToLoans={() => setActivePage('pinjaman')}
                 />
               )}
 
@@ -352,6 +447,42 @@ export default function App() {
       <AttachmentViewerModal
         attachment={previewAttachment}
         onClose={() => setPreviewAttachment(null)}
+      />
+
+      <NotificationDrawer
+        open={notifOpen}
+        notifications={notif.notifications}
+        readSet={notif.unreadIds}
+        unreadCount={notif.unreadCount}
+        permission={notif.permission}
+        deviceEnabled={notif.deviceEnabled}
+        onClose={() => setNotifOpen(false)}
+        onSelectNotification={(item) => {
+          notif.markAsRead(item.id);
+          setNotifOpen(false);
+          if (item.targetPage === 'pengembalian' && item.targetLoanId) {
+            setPreselectedLoanId(item.targetLoanId);
+          } else {
+            setPreselectedLoanId(null);
+          }
+          setActivePage(item.targetPage);
+        }}
+        onMarkAsRead={notif.markAsRead}
+        onMarkAllAsRead={notif.markAllAsRead}
+        onRequestPermission={notif.requestDevicePermission}
+        onToggleDeviceEnabled={notif.toggleDeviceEnabled}
+        onSendTestNow={notif.sendTestOrDigestNow}
+      />
+
+      <NotificationToastBanner
+        visible={notif.showFloatingToast && !notifOpen}
+        urgentCount={notif.urgentUnreadCount}
+        totalUnread={notif.unreadCount}
+        onOpenDrawer={() => {
+          notif.dismissFloatingToast();
+          setNotifOpen(true);
+        }}
+        onDismiss={notif.dismissFloatingToast}
       />
     </div>
   );

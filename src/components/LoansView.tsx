@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Calculator,
   CalendarClock,
   Edit2,
   Paperclip,
@@ -24,6 +25,7 @@ import {
 } from '../utils/format';
 import { AttachmentField } from './AttachmentField';
 import { ConfirmModal } from './ConfirmModal';
+import { DateInputID } from './DateInputID';
 
 interface LoansViewProps {
   loans: ComputedLoan[];
@@ -77,7 +79,9 @@ export function LoansView({
   const [loanDate, setLoanDate] = useState(todayISO());
   const [dueDate, setDueDate] = useState('');
   const [principalText, setPrincipalText] = useState('');
+  const [adminFeeText, setAdminFeeText] = useState('25.000');
   const [interestText, setInterestText] = useState('0');
+  const [interestManual, setInterestManual] = useState(false);
   const [description, setDescription] = useState('');
   const [attachment, setAttachment] = useState<Attachment | undefined>(undefined);
   const [formError, setFormError] = useState('');
@@ -144,7 +148,9 @@ export function LoansView({
     setLoanDate(today);
     setDueDate(defaultDueDate(today));
     setPrincipalText('');
+    setAdminFeeText('25.000');
     setInterestText('0');
+    setInterestManual(false);
     setDescription('');
     setAttachment(undefined);
     setFormError('');
@@ -160,7 +166,9 @@ export function LoansView({
     setLoanDate(loan.loanDate);
     setDueDate(loan.dueDate);
     setPrincipalText(formatNumericDots(loan.principalAmount));
-    setInterestText(formatNumericDots(loan.interestAmount));
+    setAdminFeeText(formatNumericDots(loan.adminFee ?? 0) || '0');
+    setInterestText(formatNumericDots(loan.interestAmount) || '0');
+    setInterestManual(loan.interestAmount !== Math.round(loan.principalAmount * 0.2));
     setDescription(loan.description);
     setAttachment(loan.attachment);
     setFormError('');
@@ -168,8 +176,26 @@ export function LoansView({
   };
 
   const principalVal = parseNumericDots(principalText);
+  const adminFeeVal = parseNumericDots(adminFeeText);
   const interestVal = parseNumericDots(interestText);
+  const netDisbursedVal = Math.max(0, principalVal - adminFeeVal);
   const totalCalculated = principalVal + interestVal;
+
+  const handlePrincipalChange = (raw: string) => {
+    const formatted = formatNumericDots(raw);
+    setPrincipalText(formatted);
+    const nextPrincipal = parseNumericDots(formatted);
+    if (!interestManual) {
+      const autoInterest = Math.round(nextPrincipal * 0.2);
+      setInterestText(autoInterest > 0 ? formatNumericDots(autoInterest) : '0');
+    }
+  };
+
+  const handleResetAutoInterest = () => {
+    setInterestManual(false);
+    const autoInterest = Math.round(principalVal * 0.2);
+    setInterestText(autoInterest > 0 ? formatNumericDots(autoInterest) : '0');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,6 +214,10 @@ export function LoansView({
     }
     if (principalVal <= 0) {
       setFormError('Pokok pinjaman harus lebih dari Rp 0.');
+      return;
+    }
+    if (adminFeeVal > principalVal) {
+      setFormError('Uang administrasi tidak boleh lebih besar dari pokok pinjaman.');
       return;
     }
     if (editingLoan && totalCalculated < editingLoan.paidAmount) {
@@ -210,6 +240,7 @@ export function LoansView({
           loanDate,
           dueDate,
           principalAmount: principalVal,
+          adminFee: adminFeeVal,
           interestAmount: interestVal,
           totalAmount: totalCalculated,
           description: description.trim(),
@@ -657,9 +688,17 @@ export function LoansView({
                   <p className="mt-1 font-mono text-sm font-bold text-[#0F1F17] tabular-nums">
                     {formatRupiah(selectedLoan.principalAmount)}
                   </p>
+                  {(selectedLoan.adminFee ?? 0) > 0 && (
+                    <p className="mt-0.5 text-[10px] text-[#5C6E63] tabular-nums">
+                      Admin {formatRupiah(selectedLoan.adminFee || 0)} · Cair{' '}
+                      {formatRupiah(
+                        Math.max(0, selectedLoan.principalAmount - (selectedLoan.adminFee || 0))
+                      )}
+                    </p>
+                  )}
                 </div>
                 <div className="rounded-lg border border-[#DCE4DE] p-3">
-                  <p className="text-[11px] text-[#5C6E63]">Jasa / Admin</p>
+                  <p className="text-[11px] text-[#5C6E63]">Bunga (20%)</p>
                   <p className="mt-1 font-mono text-sm font-bold text-[#0F1F17] tabular-nums">
                     {formatRupiah(selectedLoan.interestAmount)}
                   </p>
@@ -916,13 +955,11 @@ export function LoansView({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1.5 block text-xs font-semibold text-[#2A3B31]">
-                    Tanggal Pinjam ({formatDateID(loanDate)})
+                    Tanggal Pinjam <span className="font-normal text-[#5C6E63]">(Tgl/Bln/Thn)</span>
                   </label>
-                  <input
-                    type="date"
+                  <DateInputID
                     value={loanDate}
-                    onChange={(e) => {
-                      const val = e.target.value;
+                    onChange={(val) => {
                       setLoanDate(val);
                       if (!editingLoan && val) {
                         setTxNumber(
@@ -936,20 +973,13 @@ export function LoansView({
                       }
                     }}
                     required
-                    className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] bg-white px-3 text-sm text-[#0F1F17] focus:border-[#0D4A2E] focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="mb-1.5 block text-xs font-semibold text-[#2A3B31]">
-                    Jatuh Tempo ({formatDateID(dueDate)})
+                    Jatuh Tempo <span className="font-normal text-[#5C6E63]">(Tgl/Bln/Thn)</span>
                   </label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    required
-                    className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] bg-white px-3 text-sm text-[#0F1F17] focus:border-[#0D4A2E] focus:outline-none"
-                  />
+                  <DateInputID value={dueDate} onChange={setDueDate} required />
                 </div>
               </div>
 
@@ -966,17 +996,32 @@ export function LoansView({
                       type="text"
                       inputMode="numeric"
                       value={principalText}
-                      onChange={(e) => setPrincipalText(formatNumericDots(e.target.value))}
-                      placeholder="0"
+                      onChange={(e) => handlePrincipalChange(e.target.value)}
+                      placeholder="1.000.000"
                       required
                       className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] bg-white pl-10 pr-3 font-mono text-sm font-bold text-[#0F1F17] tabular-nums focus:border-[#0D4A2E] focus:outline-none"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-[#2A3B31]">
-                    Jasa / Bunga / Admin (Rp)
-                  </label>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <label className="block text-xs font-semibold text-[#2A3B31]">
+                      Bunga 20% (Rp)
+                    </label>
+                    {interestManual ? (
+                      <button
+                        type="button"
+                        onClick={handleResetAutoInterest}
+                        className="text-[11px] font-semibold text-[#0D4A2E] hover:underline"
+                      >
+                        Reset 20%
+                      </button>
+                    ) : (
+                      <span className="rounded bg-[#0D4A2E]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#0D4A2E]">
+                        Otomatis 20%
+                      </span>
+                    )}
+                  </div>
                   <div className="relative">
                     <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-semibold text-[#5C6E63]">
                       Rp
@@ -985,19 +1030,95 @@ export function LoansView({
                       type="text"
                       inputMode="numeric"
                       value={interestText}
-                      onChange={(e) => setInterestText(formatNumericDots(e.target.value))}
+                      onChange={(e) => {
+                        setInterestManual(true);
+                        setInterestText(formatNumericDots(e.target.value) || '0');
+                      }}
                       placeholder="0"
-                      className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] bg-white pl-10 pr-3 font-mono text-sm font-bold text-[#0F1F17] tabular-nums focus:border-[#0D4A2E] focus:outline-none"
+                      className="min-h-[42px] w-full rounded-lg border border-[#DCE4DE] bg-[#F8FAF8] pl-10 pr-3 font-mono text-sm font-bold text-[#0F1F17] tabular-nums focus:border-[#0D4A2E] focus:bg-white focus:outline-none"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-[#DCE4DE] bg-[#F8FAF8] px-4 py-3 text-sm">
-                <span className="font-medium text-[#425449]">Total Tagihan Pinjaman</span>
-                <span className="font-mono text-base font-bold text-[#0D4A2E] tabular-nums">
-                  {formatRupiah(totalCalculated)}
-                </span>
+              {/* Hitung Pintar: Potongan Uang Administrasi & Rincian Otomatis */}
+              <div className="rounded-xl border border-[#C59B27]/50 bg-[#FFFDF5] p-4 space-y-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#083320] text-[#DFB848]">
+                      <Calculator className="h-3.5 w-3.5" />
+                    </div>
+                    <div>
+                      <p className="font-display text-xs font-bold text-[#0F1F17]">
+                        Hitung Pintar Pinjaman
+                      </p>
+                      <p className="text-[11px] text-[#5C6E63]">
+                        Potong biaya admin otomatis tanpa mengurangi nilai pinjaman &amp; bunga 20%
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 items-end">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[#2A3B31]">
+                      Uang Administrasi (Rp) <span className="font-normal text-[#5C6E63]">(Bisa diubah)</span>
+                    </label>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-mono text-sm font-semibold text-[#5C6E63]">
+                        Rp
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={adminFeeText}
+                        onChange={(e) =>
+                          setAdminFeeText(formatNumericDots(e.target.value) || '0')
+                        }
+                        placeholder="25.000"
+                        className="min-h-[40px] w-full rounded-lg border border-[#DCE4DE] bg-white pl-10 pr-3 font-mono text-sm font-bold text-[#0F1F17] tabular-nums focus:border-[#0D4A2E] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 px-3.5 py-2">
+                    <p className="text-[11px] font-medium text-[#0D4A2E]">
+                      Dana Bersih Diterima Peminjam
+                    </p>
+                    <p className="font-mono text-base font-bold text-[#083320] tabular-nums">
+                      {formatRupiah(netDisbursedVal)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 border-t border-[#E6D6A2]/60 pt-2.5 text-xs">
+                  <div className="flex justify-between text-[#425449]">
+                    <span>Jumlah Pinjaman (Pokok Tetap)</span>
+                    <span className="font-mono font-semibold text-[#0F1F17] tabular-nums">
+                      {formatRupiah(principalVal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[#425449]">
+                    <span>Potongan Uang Administrasi</span>
+                    <span className="font-mono font-semibold text-amber-800 tabular-nums">
+                      - {formatRupiah(adminFeeVal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[#425449]">
+                    <span>Bunga (20% dari Pokok Pinjaman)</span>
+                    <span className="font-mono font-semibold text-[#0D4A2E] tabular-nums">
+                      + {formatRupiah(interestVal)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-dashed border-[#C59B27]/50 pt-2 text-sm">
+                    <span className="font-semibold text-[#0F1F17]">
+                      Total Tagihan Pinjaman
+                    </span>
+                    <span className="font-mono text-base font-bold text-[#0D4A2E] tabular-nums">
+                      {formatRupiah(totalCalculated)}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <div>

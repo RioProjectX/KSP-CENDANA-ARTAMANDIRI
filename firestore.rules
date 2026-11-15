@@ -79,7 +79,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'txNumber', 'borrowerName', 'memberId', 'phone', 'loanDate', 'dueDate',
-          'principalAmount', 'interestAmount', 'totalAmount', 'description', 'attachment',
+          'principalAmount', 'adminFee', 'interestAmount', 'totalAmount', 'description', 'attachment',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && data.id == loanId
@@ -91,6 +91,7 @@ service cloud.firestore {
         && data.loanDate is string && data.loanDate.size() == 10
         && data.dueDate is string && data.dueDate.size() == 10
         && data.principalAmount is number && data.principalAmount > 0 && data.principalAmount <= 1000000000000
+        && (!('adminFee' in data) || (data.adminFee is number && data.adminFee >= 0 && data.adminFee <= data.principalAmount))
         && data.interestAmount is number && data.interestAmount >= 0 && data.interestAmount <= 1000000000000
         && data.totalAmount is number && data.totalAmount >= data.principalAmount && data.totalAmount <= 2000000000000
         && data.description is string && data.description.size() <= 1000
@@ -121,6 +122,42 @@ service cloud.firestore {
         && (!('attachment' in data) || isValidAttachment(data.attachment))
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 120
         && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64;
+    }
+
+    function isValidLoanApplication(data, applicationId) {
+      return data.keys().hasAll([
+          'id', 'applicationNumber', 'applicantName', 'nik', 'phone', 'address',
+          'occupation', 'requestDate', 'visitDate', 'requestedAmount',
+          'collateralNotes', 'visitSurveyNotes', 'visitChecked', 'status',
+          'surveyorName', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'applicationNumber', 'applicantName', 'nik', 'phone', 'address',
+          'occupation', 'requestDate', 'visitDate', 'requestedAmount',
+          'collateralNotes', 'visitSurveyNotes', 'visitChecked', 'status',
+          'surveyorName', 'disbursedLoanId', 'attachment', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.id == applicationId
+        && isValidId(data.id)
+        && data.applicationNumber is string && data.applicationNumber.size() >= 3 && data.applicationNumber.size() <= 64
+        && data.applicantName is string && data.applicantName.size() >= 1 && data.applicantName.size() <= 160
+        && data.nik is string && data.nik.size() <= 64
+        && data.phone is string && data.phone.size() <= 40
+        && data.address is string && data.address.size() >= 1 && data.address.size() <= 500
+        && data.occupation is string && data.occupation.size() <= 160
+        && data.requestDate is string && data.requestDate.size() == 10
+        && data.visitDate is string && (data.visitDate.size() == 0 || data.visitDate.size() == 10)
+        && data.requestedAmount is number && data.requestedAmount > 0 && data.requestedAmount <= 1000000000000
+        && data.collateralNotes is string && data.collateralNotes.size() <= 1000
+        && data.visitSurveyNotes is string && data.visitSurveyNotes.size() <= 1000
+        && data.visitChecked is bool
+        && data.status in ['MENUNGGU_VISIT', 'MENUNGGU_FINALISASI', 'LOLOS', 'TIDAK_LOLOS']
+        && data.surveyorName is string && data.surveyorName.size() <= 120
+        && (!('disbursedLoanId' in data) || isValidId(data.disbursedLoanId))
+        && (!('attachment' in data) || isValidAttachment(data.attachment))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 120
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 64;
     }
 
     // Health connection check document
@@ -178,7 +215,7 @@ service cloud.firestore {
           && incoming().createdAt == existing().createdAt
           && incoming().diff(existing()).affectedKeys().hasOnly([
             'txNumber', 'borrowerName', 'memberId', 'phone', 'loanDate', 'dueDate',
-            'principalAmount', 'interestAmount', 'totalAmount', 'description', 'attachment', 'updatedAt'
+            'principalAmount', 'adminFee', 'interestAmount', 'totalAmount', 'description', 'attachment', 'updatedAt'
           ]);
         allow delete: if isValidWorkspaceId(workspaceId) && isValidId(loanId);
       }
@@ -191,6 +228,27 @@ service cloud.firestore {
           && isValidRepayment(incoming(), repaymentId)
           && exists(/databases/$(database)/documents/koperasi/$(workspaceId)/loans/$(incoming().loanId));
         allow delete: if isValidWorkspaceId(workspaceId) && isValidId(repaymentId);
+      }
+
+      match /loanApplications/{applicationId} {
+        allow get: if isValidWorkspaceId(workspaceId) && isValidId(applicationId);
+        allow list: if isValidWorkspaceId(workspaceId);
+        allow create: if isValidWorkspaceId(workspaceId)
+          && isValidId(applicationId)
+          && isValidLoanApplication(incoming(), applicationId);
+        allow update: if isValidWorkspaceId(workspaceId)
+          && isValidId(applicationId)
+          && isValidLoanApplication(incoming(), applicationId)
+          && incoming().id == existing().id
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'applicationNumber', 'applicantName', 'nik', 'phone', 'address',
+            'occupation', 'requestDate', 'visitDate', 'requestedAmount',
+            'collateralNotes', 'visitSurveyNotes', 'visitChecked', 'status',
+            'surveyorName', 'disbursedLoanId', 'attachment', 'updatedAt'
+          ]);
+        allow delete: if isValidWorkspaceId(workspaceId) && isValidId(applicationId);
       }
     }
   }
