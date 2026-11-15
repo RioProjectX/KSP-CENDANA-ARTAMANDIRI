@@ -26,6 +26,8 @@ import {
   LoanApplicationStatus,
 } from '../types';
 import {
+  addMonthsISO,
+  calculateLoanMonths,
   formatDateID,
   formatNumericDots,
   formatRupiah,
@@ -89,9 +91,7 @@ const STATUS_META: Record<
 };
 
 function defaultDueDate(fromISO: string): string {
-  const dt = new Date(`${fromISO}T00:00:00`);
-  dt.setDate(dt.getDate() + 30);
-  return dt.toISOString().slice(0, 10);
+  return addMonthsISO(fromISO, 1);
 }
 
 export function LoanApplicationsView({
@@ -390,11 +390,19 @@ export function LoanApplicationsView({
     setDisburseError('');
   };
 
+  const disburseMonths = calculateLoanMonths(loanDate, dueDate);
+  const disburseAutoRate = 20 * disburseMonths;
   const disbursePrincipal = parseNumericDots(principalText);
   const disburseAdminFee = parseNumericDots(adminFeeText);
   const disburseInterest = parseNumericDots(interestText);
   const disburseTotal = disbursePrincipal + disburseInterest;
   const disburseNet = Math.max(0, disbursePrincipal - disburseAdminFee);
+
+  const syncDisburseInterest = (nextPrincipal: number, nextLoanDate: string, nextDueDate: string) => {
+    const months = calculateLoanMonths(nextLoanDate, nextDueDate);
+    const autoInterest = Math.round(nextPrincipal * 0.2 * months);
+    setInterestText(autoInterest > 0 ? formatNumericDots(autoInterest) : '0');
+  };
 
   const handleDisburseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1535,9 +1543,16 @@ export function LoanApplicationsView({
                     value={loanDate}
                     onChange={(val) => {
                       setLoanDate(val);
+                      let nextDue = dueDate;
                       if (val) {
                         setLoanTxNumber(generateTxNumber('PJ', val, existingLoanNumbers));
-                        setDueDate(defaultDueDate(val));
+                        if (!dueDate || dueDate < val) {
+                          nextDue = defaultDueDate(val);
+                          setDueDate(nextDue);
+                        }
+                      }
+                      if (!interestManual && val && nextDue) {
+                        syncDisburseInterest(disbursePrincipal, val, nextDue);
                       }
                     }}
                     required
@@ -1547,7 +1562,16 @@ export function LoanApplicationsView({
                   <label className="mb-1.5 block text-xs font-semibold text-[#2A3B31]">
                     Jatuh Tempo <span className="font-normal text-[#5C6E63]">(Tgl/Bln/Thn)</span>
                   </label>
-                  <DateInputID value={dueDate} onChange={setDueDate} required />
+                  <DateInputID
+                    value={dueDate}
+                    onChange={(val) => {
+                      setDueDate(val);
+                      if (!interestManual && loanDate && val) {
+                        syncDisburseInterest(disbursePrincipal, loanDate, val);
+                      }
+                    }}
+                    required
+                  />
                 </div>
               </div>
 
@@ -1568,8 +1592,7 @@ export function LoanApplicationsView({
                         const formatted = formatNumericDots(e.target.value);
                         setPrincipalText(formatted);
                         if (!interestManual) {
-                          const p = parseNumericDots(formatted);
-                          setInterestText(formatNumericDots(Math.round(p * 0.2)) || '0');
+                          syncDisburseInterest(parseNumericDots(formatted), loanDate, dueDate);
                         }
                       }}
                       required
@@ -1580,24 +1603,22 @@ export function LoanApplicationsView({
                 <div>
                   <div className="mb-1.5 flex items-center justify-between gap-2">
                     <label className="block text-xs font-semibold text-[#2A3B31]">
-                      Bunga 20% (Rp)
+                      Bunga 20%/Bln ({disburseMonths} Bln)
                     </label>
                     {interestManual ? (
                       <button
                         type="button"
                         onClick={() => {
                           setInterestManual(false);
-                          setInterestText(
-                            formatNumericDots(Math.round(disbursePrincipal * 0.2)) || '0'
-                          );
+                          syncDisburseInterest(disbursePrincipal, loanDate, dueDate);
                         }}
                         className="text-[11px] font-semibold text-[#0D4A2E] hover:underline"
                       >
-                        Reset 20%
+                        Reset {disburseAutoRate}%
                       </button>
                     ) : (
                       <span className="rounded bg-[#0D4A2E]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#0D4A2E]">
-                        Otomatis 20%
+                        Otomatis {disburseAutoRate}%
                       </span>
                     )}
                   </div>
@@ -1624,9 +1645,14 @@ export function LoanApplicationsView({
                   <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#083320] text-[#DFB848]">
                     <Calculator className="h-3.5 w-3.5" />
                   </div>
-                  <p className="font-display text-xs font-bold text-[#0F1F17]">
-                    Hitung Pintar Pencairan Pinjaman
-                  </p>
+                  <div>
+                    <p className="font-display text-xs font-bold text-[#0F1F17]">
+                      Hitung Pintar Pencairan Pinjaman
+                    </p>
+                    <p className="text-[11px] text-[#5C6E63]">
+                      Tenor otomatis {disburseMonths} bulan × bunga 20%/bulan ({disburseAutoRate}%)
+                    </p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 items-end">
                   <div>
@@ -1657,11 +1683,19 @@ export function LoanApplicationsView({
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center justify-between border-t border-dashed border-[#C59B27]/50 pt-2 text-sm">
-                  <span className="font-semibold text-[#0F1F17]">Total Tagihan Pinjaman</span>
-                  <span className="font-mono text-base font-bold text-[#0D4A2E] tabular-nums">
-                    {formatRupiah(disburseTotal)}
-                  </span>
+                <div className="space-y-1 border-t border-dashed border-[#C59B27]/50 pt-2 text-xs">
+                  <div className="flex justify-between text-[#425449]">
+                    <span>Bunga ({disburseMonths} bln × 20% = {disburseAutoRate}%)</span>
+                    <span className="font-mono font-semibold text-[#0D4A2E] tabular-nums">
+                      + {formatRupiah(disburseInterest)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-semibold text-[#0F1F17]">Total yang Harus Dibayarkan</span>
+                    <span className="font-mono text-base font-bold text-[#0D4A2E] tabular-nums">
+                      {formatRupiah(disburseTotal)}
+                    </span>
+                  </div>
                 </div>
               </div>
 

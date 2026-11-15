@@ -82,6 +82,39 @@ export function diffCalendarDays(targetISO: string, fromISO: string = todayISO()
   return Math.round((targetUtc - fromUtc) / (1000 * 60 * 60 * 24));
 }
 
+export function addMonthsISO(fromISO: string, months: number = 1): string {
+  const [y, m, d] = fromISO.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return todayISO();
+  const targetMonthIndex = m - 1 + months;
+  const targetYear = y + Math.floor(targetMonthIndex / 12);
+  const normalizedMonth = ((targetMonthIndex % 12) + 12) % 12;
+  const maxDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate();
+  const clampedDay = Math.min(d, maxDay);
+  return `${String(targetYear).padStart(4, '0')}-${String(normalizedMonth + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`;
+}
+
+export function calculateLoanMonths(loanDateISO: string, dueDateISO: string): number {
+  if (!loanDateISO || !dueDateISO) return 1;
+  const [sy, sm, sd] = loanDateISO.slice(0, 10).split('-').map(Number);
+  const [ey, em, ed] = dueDateISO.slice(0, 10).split('-').map(Number);
+  if (!sy || !sm || !sd || !ey || !em || !ed) return 1;
+  if (dueDateISO <= loanDateISO) return 1;
+
+  const monthDiff = (ey - sy) * 12 + (em - sm);
+  if (monthDiff <= 0) return 1;
+
+  const lastDayOfEndMonth = new Date(Date.UTC(ey, em, 0)).getUTCDate();
+  const isEndOfMonthAligned = ed === lastDayOfEndMonth && sd >= ed;
+  if (ed < sd && !isEndOfMonthAligned) {
+    const prevMonthLastDay = new Date(Date.UTC(ey, em - 1, 0)).getUTCDate();
+    const remainingDays = prevMonthLastDay - sd + ed;
+    return Math.max(1, monthDiff - 1 + (remainingDays >= 15 ? 1 : 0));
+  }
+
+  const extraDays = ed - sd;
+  return Math.max(1, monthDiff + (extraDays >= 15 ? 1 : 0));
+}
+
 export function generateTxNumber(
   prefix: 'KM' | 'KK' | 'PJ' | 'PB' | 'PGJ',
   dateISO: string,
