@@ -3,6 +3,7 @@ import {
   DashboardSummary,
   DueReminderLevel,
   KoperasiDatabase,
+  Loan,
   LoanStatus,
   Repayment,
   UnifiedLedgerRow,
@@ -115,6 +116,35 @@ export function calculateLoanMonths(loanDateISO: string, dueDateISO: string): nu
   return Math.max(1, monthDiff + (extraDays >= 15 ? 1 : 0));
 }
 
+export const MIN_DAILY_LATE_PENALTY = 10000;
+export const DAILY_LATE_PENALTY_RATE = 0.01;
+
+export function calculateDailyPenaltyRate(principalAmount: number): number {
+  const safePrincipal = Number.isFinite(principalAmount) ? Math.max(0, principalAmount) : 0;
+  return Math.max(MIN_DAILY_LATE_PENALTY, Math.round(safePrincipal * DAILY_LATE_PENALTY_RATE));
+}
+
+export function calculateLatePenalty(
+  loan: Pick<Loan, 'principalAmount' | 'dueDate'>,
+  asOfDateISO: string = todayISO(),
+  remainingBeforePenalty: number = 1
+): { daysLate: number; dailyRate: number; penaltyAmount: number } {
+  if (remainingBeforePenalty <= 0 || !loan.dueDate || !asOfDateISO) {
+    return { daysLate: 0, dailyRate: 0, penaltyAmount: 0 };
+  }
+  const daysUntil = diffCalendarDays(loan.dueDate, asOfDateISO);
+  if (daysUntil >= 0) {
+    return { daysLate: 0, dailyRate: 0, penaltyAmount: 0 };
+  }
+  const daysLate = Math.abs(daysUntil);
+  const dailyRate = calculateDailyPenaltyRate(loan.principalAmount);
+  return {
+    daysLate,
+    dailyRate,
+    penaltyAmount: daysLate * dailyRate,
+  };
+}
+
 export function generateTxNumber(
   prefix: 'KM' | 'KK' | 'PJ' | 'PB' | 'PGJ',
   dateISO: string,
@@ -162,9 +192,18 @@ export function computeKoperasiMetrics(db: KoperasiDatabase): {
     const loanRepayments = [...(repaymentsByLoan.get(loan.id) || [])].sort((a, b) =>
       a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt)
     );
-    const paidAmount = loanRepayments.reduce((sum, r) => sum + r.amount, 0);
+    const totalPenaltyPaid = loanRepayments.reduce((sum, r) => sum + (r.penaltyAmount || 0), 0);
+    const paidAmount = loanRepayments.reduce(
+      (sum, r) => sum + Math.max(0, r.amount - (r.penaltyAmount || 0)),
+      0
+    );
     const remainingAmount = Math.max(0, loan.totalAmount - paidAmount);
     const daysUntilDue = diffCalendarDays(loan.dueDate, today);
+    const { daysLate, dailyRate, penaltyAmount } = calculateLatePenalty(
+      loan,
+      today,
+      remainingAmount
+    );
 
     let status: LoanStatus = 'DIPINJAM';
     let dueReminderLevel: DueReminderLevel = 'aman';
@@ -189,6 +228,10 @@ export function computeKoperasiMetrics(db: KoperasiDatabase): {
       remainingAmount,
       status,
       daysUntilDue,
+      daysLate,
+      dailyPenaltyRate: dailyRate,
+      accruedPenalty: penaltyAmount,
+      totalPenaltyPaid,
       dueReminderLevel,
       repayments: loanRepayments,
     };
@@ -273,12 +316,19 @@ export function computeKoperasiMetrics(db: KoperasiDatabase): {
     })),
     ...db.repayments.map((rep) => {
       const parent = loanMap.get(rep.loanId);
+      const isExt = rep.repaymentType === 'perpanjangan';
+      const hasPenalty = (rep.penaltyAmount || 0) > 0;
+      const categoryLabel = isExt
+        ? `Perpanjangan ${rep.loanTxNumber}`
+        : hasPenalty
+        ? `Cicilan + Denda ${rep.loanTxNumber}`
+        : `Cicilan ${rep.loanTxNumber}`;
       return {
         id: `rep-${rep.id}`,
         date: rep.date,
         txNumber: rep.txNumber,
         kind: 'Pengembalian Dana' as const,
-        category: `Cicilan ${rep.loanTxNumber}`,
+        category: categoryLabel,
         party: parent?.borrowerName || '-',
         description: rep.notes || `Pengembalian pinjaman ${rep.loanTxNumber}`,
         debit: rep.amount,

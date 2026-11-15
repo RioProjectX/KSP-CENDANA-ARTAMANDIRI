@@ -47,7 +47,7 @@ export function buildAppNotifications(
         category: 'jatuh-tempo',
         severity: 'critical',
         title: `Terlambat ${daysLate} Hari — ${loan.borrowerName}`,
-        message: `${loan.txNumber} · Sisa tagihan ${formatRupiah(loan.remainingAmount)} (Jatuh tempo ${formatDateID(loan.dueDate)}).`,
+        message: `${loan.txNumber} · Sisa tagihan ${formatRupiah(loan.remainingAmount)} + est. denda ${formatRupiah(loan.accruedPenalty)} (Jatuh tempo ${formatDateID(loan.dueDate)}).`,
         dateLabel: `Terlambat ${daysLate} hr`,
         targetPage: 'pengembalian',
         targetLoanId: loan.id,

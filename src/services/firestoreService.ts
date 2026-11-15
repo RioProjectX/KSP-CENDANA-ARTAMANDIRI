@@ -9,10 +9,12 @@ import {
 } from 'firebase/firestore';
 import { firestoreDb, handleFirestoreError, OperationType } from '../firebase';
 import type {
+  Attachment,
   CashTransaction,
   KoperasiDatabase,
   Loan,
   LoanApplication,
+  PaymentMethod,
   Repayment,
   StaffAccount,
 } from '../types';
@@ -373,10 +375,17 @@ export async function createRepaymentRecord(
   payload: Omit<Repayment, 'id' | 'createdAt'>
 ): Promise<void> {
   const id = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const amount = Math.round(payload.amount);
+  const penaltyAmount =
+    payload.penaltyAmount && payload.penaltyAmount > 0
+      ? Math.min(amount, Math.round(payload.penaltyAmount))
+      : undefined;
   const clean = stripUndefined({
     ...payload,
     id,
-    amount: Math.round(payload.amount),
+    amount,
+    repaymentType: payload.repaymentType || 'cicilan',
+    penaltyAmount,
     notes: payload.notes || '',
     createdAt: new Date().toISOString(),
   });
@@ -384,6 +393,69 @@ export async function createRepaymentRecord(
     await setDoc(docRef('repayments', id), clean);
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, `${colPath('repayments')}/${id}`);
+  }
+}
+
+export async function extendLoanRecord(params: {
+  loan: Loan;
+  txNumber: string;
+  date: string;
+  newDueDate: string;
+  extensionInterest: number;
+  paymentMethod: PaymentMethod;
+  notes: string;
+  attachment?: Attachment;
+  createdBy: string;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const repId = `rep-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const interestAdd = Math.max(1, Math.round(params.extensionInterest));
+
+  const updatedLoan = stripUndefined({
+    id: params.loan.id,
+    txNumber: params.loan.txNumber,
+    borrowerName: params.loan.borrowerName,
+    memberId: params.loan.memberId || '',
+    phone: params.loan.phone || '',
+    loanDate: params.loan.loanDate,
+    dueDate: params.newDueDate,
+    principalAmount: Math.round(params.loan.principalAmount),
+    adminFee: Math.min(
+      Math.round(params.loan.principalAmount),
+      Math.max(0, Math.round(params.loan.adminFee ?? 0))
+    ),
+    interestAmount: Math.round((params.loan.interestAmount || 0) + interestAdd),
+    totalAmount: Math.round(params.loan.totalAmount + interestAdd),
+    description: params.loan.description || '',
+    attachment: params.loan.attachment,
+    createdBy: params.loan.createdBy,
+    createdAt: params.loan.createdAt,
+    updatedAt: now,
+  });
+
+  const cleanRepayment = stripUndefined({
+    id: repId,
+    txNumber: params.txNumber,
+    loanId: params.loan.id,
+    loanTxNumber: params.loan.txNumber,
+    date: params.date,
+    amount: interestAdd,
+    repaymentType: 'perpanjangan' as const,
+    penaltyAmount: 0,
+    paymentMethod: params.paymentMethod,
+    notes: params.notes || '',
+    attachment: params.attachment,
+    createdBy: params.createdBy,
+    createdAt: now,
+  });
+
+  try {
+    const batch = writeBatch(firestoreDb);
+    batch.set(docRef('loans', params.loan.id), updatedLoan);
+    batch.set(docRef('repayments', repId), cleanRepayment);
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `${colPath('loans')}/${params.loan.id}`);
   }
 }
 
@@ -640,9 +712,16 @@ export async function restoreKoperasiDatabase(data: KoperasiDatabase): Promise<v
     }
 
     for (const rep of data.repayments) {
+      const amount = Math.round(rep.amount);
+      const penaltyAmount =
+        rep.penaltyAmount !== undefined && rep.penaltyAmount > 0
+          ? Math.min(amount, Math.round(rep.penaltyAmount))
+          : undefined;
       const cleanRep = stripUndefined({
         ...rep,
-        amount: Math.round(rep.amount),
+        amount,
+        penaltyAmount,
+        repaymentType: rep.repaymentType || undefined,
         notes: rep.notes || '',
       });
       await setDoc(docRef('repayments', cleanRep.id), cleanRep);

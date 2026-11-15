@@ -13,7 +13,7 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { Attachment, ComputedLoan, Loan, LoanStatus } from '../types';
+import { Attachment, ComputedLoan, Loan, LoanStatus, RepaymentKind } from '../types';
 import {
   addMonthsISO,
   calculateLoanMonths,
@@ -39,7 +39,7 @@ interface LoansViewProps {
   ) => Promise<void>;
   onDeleteLoan: (id: string) => Promise<void>;
   onPreviewAttachment: (att: Attachment) => void;
-  onGoToRepayment: (loanId: string) => void;
+  onGoToRepayment: (loanId: string, mode?: RepaymentKind) => void;
 }
 
 const STATUS_STYLE: Record<LoanStatus, string> = {
@@ -536,6 +536,11 @@ export function LoansView({
                         >
                           {getDueReminderLabel(loan)}
                         </span>
+                        {loan.daysLate > 0 && (
+                          <div className="mt-0.5 font-mono text-[11px] font-semibold text-red-700 tabular-nums">
+                            Denda: {formatRupiah(loan.accruedPenalty)}
+                          </div>
+                        )}
                       </td>
                       <td
                         className="px-4 py-3 text-right whitespace-nowrap"
@@ -622,15 +627,22 @@ export function LoansView({
                 </div>
 
                 <div className="flex items-center justify-between border-t border-[#EBF0EC] pt-2.5 text-xs">
-                  <span
-                    className={
-                      loan.dueReminderLevel === 'terlambat'
-                        ? 'font-semibold text-red-700'
-                        : 'font-medium text-[#5C6E63]'
-                    }
-                  >
-                    {getDueReminderLabel(loan)}
-                  </span>
+                  <div>
+                    <span
+                      className={
+                        loan.dueReminderLevel === 'terlambat'
+                          ? 'font-semibold text-red-700'
+                          : 'font-medium text-[#5C6E63]'
+                      }
+                    >
+                      {getDueReminderLabel(loan)}
+                    </span>
+                    {loan.daysLate > 0 && (
+                      <p className="font-mono text-[11px] font-semibold text-red-700 tabular-nums">
+                        Denda: {formatRupiah(loan.accruedPenalty)}
+                      </p>
+                    )}
+                  </div>
 
                   <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     {loan.status !== 'LUNAS' && (
@@ -700,20 +712,54 @@ export function LoansView({
                 </div>
 
                 {selectedLoan.status !== 'LUNAS' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const id = selectedLoan.id;
-                      setSelectedLoanId(null);
-                      onGoToRepayment(id);
-                    }}
-                    className="flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#0D4A2E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#083320]"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5 text-[#DFB848]" />
-                    <span>Catat Pengembalian</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = selectedLoan.id;
+                        setSelectedLoanId(null);
+                        onGoToRepayment(id, 'perpanjangan');
+                      }}
+                      className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-[#C59B27] bg-[#FEF9E7] px-3 py-1.5 text-xs font-semibold text-[#6E5108] hover:bg-[#FDF3CC]"
+                    >
+                      <CalendarClock className="h-3.5 w-3.5" />
+                      <span>Perpanjang</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = selectedLoan.id;
+                        setSelectedLoanId(null);
+                        onGoToRepayment(id, 'cicilan');
+                      }}
+                      className="flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#0D4A2E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#083320]"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 text-[#DFB848]" />
+                      <span>Catat Pengembalian</span>
+                    </button>
+                  </div>
                 )}
               </div>
+
+              {/* Automatic Overdue Penalty Banner (ONLY when daysLate > 0) */}
+              {selectedLoan.daysLate > 0 && (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-900">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold">
+                      Denda Keterlambatan Berjalan ({selectedLoan.daysLate} hari ×{' '}
+                      {formatRupiah(selectedLoan.dailyPenaltyRate)}/hari)
+                    </span>
+                    <span className="font-mono text-sm font-bold text-red-700 tabular-nums">
+                      {formatRupiah(selectedLoan.accruedPenalty)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-red-800">
+                    Tarif 1% per hari dari pokok pinjaman (minimal Rp 10.000/hari). Denda tidak
+                    dikenakan jika peminjam memperpanjang jatuh tempo dengan membayar bunga
+                    bulanan 20%.
+                  </p>
+                </div>
+              )}
 
               {/* Financial Breakdown */}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -849,10 +895,19 @@ export function LoansView({
                         className="flex items-center justify-between gap-3 px-4 py-3 text-xs"
                       >
                         <div>
-                          <p className="font-semibold text-[#0F1F17]">
-                            Cicilan #{idx + 1} ·{' '}
-                            <span className="font-mono text-[#0D4A2E]">{rep.txNumber}</span>
-                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="font-semibold text-[#0F1F17]">
+                              {rep.repaymentType === 'perpanjangan'
+                                ? `Perpanjangan #${idx + 1}`
+                                : `Cicilan #${idx + 1}`}{' '}
+                              · <span className="font-mono text-[#0D4A2E]">{rep.txNumber}</span>
+                            </p>
+                            {(rep.penaltyAmount || 0) > 0 && (
+                              <span className="rounded bg-red-50 border border-red-200 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
+                                + Denda {formatRupiah(rep.penaltyAmount!)}
+                              </span>
+                            )}
+                          </div>
                           <p className="mt-0.5 text-[#5C6E63]">
                             {formatDateID(rep.date)} · {rep.paymentMethod}
                             {rep.notes ? ` · ${rep.notes}` : ''}

@@ -56,6 +56,8 @@ export interface Loan {
   updatedAt: string;
 }
 
+export type RepaymentKind = 'cicilan' | 'perpanjangan';
+
 export interface Repayment {
   id: string;
   txNumber: string;
@@ -63,6 +65,8 @@ export interface Repayment {
   loanTxNumber: string;
   date: string; // YYYY-MM-DD
   amount: number;
+  repaymentType?: RepaymentKind;
+  penaltyAmount?: number;
   paymentMethod: PaymentMethod;
   notes: string;
   attachment?: Attachment;
@@ -118,6 +122,10 @@ export interface ComputedLoan extends Loan {
   remainingAmount: number;
   status: LoanStatus;
   daysUntilDue: number;
+  daysLate: number;
+  dailyPenaltyRate: number;
+  accruedPenalty: number;
+  totalPenaltyPaid: number;
   dueReminderLevel: DueReminderLevel;
   repayments: Repayment[];
 }

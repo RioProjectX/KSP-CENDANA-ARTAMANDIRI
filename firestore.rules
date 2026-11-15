@@ -108,6 +108,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'txNumber', 'loanId', 'loanTxNumber', 'date', 'amount',
+          'repaymentType', 'penaltyAmount',
           'paymentMethod', 'notes', 'attachment', 'createdBy', 'createdAt'
         ])
         && data.id == repaymentId
@@ -117,6 +118,8 @@ service cloud.firestore {
         && data.loanTxNumber is string && data.loanTxNumber.size() >= 3 && data.loanTxNumber.size() <= 64
         && data.date is string && data.date.size() == 10
         && data.amount is number && data.amount > 0 && data.amount <= 1000000000000
+        && (!('repaymentType' in data) || data.repaymentType in ['cicilan', 'perpanjangan'])
+        && (!('penaltyAmount' in data) || (data.penaltyAmount is number && data.penaltyAmount >= 0 && data.penaltyAmount <= data.amount))
         && data.paymentMethod in ['Tunai', 'Transfer Bank']
         && data.notes is string && data.notes.size() <= 500
         && (!('attachment' in data) || isValidAttachment(data.attachment))

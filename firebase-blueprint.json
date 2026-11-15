@@ -241,6 +241,15 @@
         "amount": {
           "type": "number"
         },
+        "repaymentType": {
+          "type": "string",
+          "enum": ["cicilan", "perpanjangan"],
+          "description": "Jenis transaksi: cicilan/pelunasan biasa atau perpanjangan jatuh tempo (bayar bunga bulanan)."
+        },
+        "penaltyAmount": {
+          "type": "number",
+          "description": "Porsi denda keterlambatan harian (1%/hari min Rp 10.000) yang termasuk dalam total pembayaran."
+        },
         "paymentMethod": {
           "type": "string",
           "enum": ["Tunai", "Transfer Bank"]

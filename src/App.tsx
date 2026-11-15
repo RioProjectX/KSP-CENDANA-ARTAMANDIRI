@@ -23,6 +23,7 @@ import {
   createRepaymentRecord,
   createStaffAccount,
   disburseLoanApplicationRecord,
+  extendLoanRecord,
   removeCashTransaction,
   removeLoanApplicationRecord,
   removeLoanRecord,
@@ -43,11 +44,13 @@ import {
   KoperasiDatabase,
   Loan,
   LoanApplication,
+  PaymentMethod,
   Repayment,
+  RepaymentKind,
   StaffAccount,
   UserRole,
 } from './types';
-import { computeKoperasiMetrics, formatDateID, todayISO } from './utils/format';
+import { computeKoperasiMetrics, formatDateID, formatRupiah, todayISO } from './utils/format';
 
 const FALLBACK_OPERATOR: StaffAccount = {
   id: 'admin-utama',
@@ -85,6 +88,8 @@ export default function App() {
   const [notifOpen, setNotifOpen] = useState<boolean>(false);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const [preselectedLoanId, setPreselectedLoanId] = useState<string | null>(null);
+  const [preselectedRepaymentMode, setPreselectedRepaymentMode] =
+    useState<RepaymentKind>('cicilan');
 
   useEffect(() => {
     void testFirebaseConnection();
@@ -174,14 +179,47 @@ export default function App() {
     if (!loan) throw new Error('Nomor pinjaman tidak ditemukan.');
     const paidSoFar = db.repayments
       .filter((r) => r.loanId === loan.id)
-      .reduce((sum, r) => sum + r.amount, 0);
+      .reduce((sum, r) => sum + Math.max(0, r.amount - (r.penaltyAmount || 0)), 0);
     const remaining = Math.max(0, loan.totalAmount - paidSoFar);
-    if (payload.amount > remaining) {
-      throw new Error(`Nominal pembayaran melebihi sisa tagihan (${remaining}).`);
+    const penaltyPart = Math.max(0, Math.round(payload.penaltyAmount || 0));
+    const loanPortion = Math.max(0, payload.amount - penaltyPart);
+    if (loanPortion > remaining) {
+      throw new Error(
+        `Nominal angsuran melebihi sisa tagihan (${formatRupiah(remaining)}) di luar denda.`
+      );
     }
     await createRepaymentRecord({
       ...payload,
       loanTxNumber: loan.txNumber,
+    });
+  };
+
+  const handleExtendLoan = async (params: {
+    loanId: string;
+    txNumber: string;
+    date: string;
+    newDueDate: string;
+    extensionInterest: number;
+    paymentMethod: PaymentMethod;
+    notes: string;
+    attachment?: Attachment;
+    createdBy: string;
+  }) => {
+    const loan = db.loans.find((l) => l.id === params.loanId);
+    if (!loan) throw new Error('Nomor pinjaman tidak ditemukan.');
+    if (!params.newDueDate || params.newDueDate <= loan.dueDate) {
+      throw new Error('Tanggal jatuh tempo baru harus lebih lambat dari jatuh tempo sebelumnya.');
+    }
+    await extendLoanRecord({
+      loan,
+      txNumber: params.txNumber,
+      date: params.date,
+      newDueDate: params.newDueDate,
+      extensionInterest: params.extensionInterest,
+      paymentMethod: params.paymentMethod,
+      notes: params.notes,
+      attachment: params.attachment,
+      createdBy: params.createdBy,
     });
   };
 
@@ -265,8 +303,9 @@ export default function App() {
     await removeStaffAccount(id);
   };
 
-  const handleGoToRepayment = (loanId: string) => {
+  const handleGoToRepayment = (loanId: string, mode: RepaymentKind = 'cicilan') => {
     setPreselectedLoanId(loanId);
+    setPreselectedRepaymentMode(mode);
     setActivePage('pengembalian');
   };
 
@@ -287,7 +326,10 @@ export default function App() {
       <Sidebar
         activePage={activePage}
         onNavigate={(page) => {
-          if (page !== 'pengembalian') setPreselectedLoanId(null);
+          if (page !== 'pengembalian') {
+            setPreselectedLoanId(null);
+            setPreselectedRepaymentMode('cicilan');
+          }
           setActivePage(page);
         }}
         currentUser={currentUser}
@@ -409,8 +451,10 @@ export default function App() {
                   loans={computedLoans}
                   repayments={db.repayments}
                   preselectedLoanId={preselectedLoanId}
+                  preselectedMode={preselectedRepaymentMode}
                   currentUserName={currentUser.name}
                   onAddRepayment={handleAddRepayment}
+                  onExtendLoan={handleExtendLoan}
                   onDeleteRepayment={handleDeleteRepayment}
                   onPreviewAttachment={setPreviewAttachment}
                 />
@@ -462,8 +506,10 @@ export default function App() {
           setNotifOpen(false);
           if (item.targetPage === 'pengembalian' && item.targetLoanId) {
             setPreselectedLoanId(item.targetLoanId);
+            setPreselectedRepaymentMode('cicilan');
           } else {
             setPreselectedLoanId(null);
+            setPreselectedRepaymentMode('cicilan');
           }
           setActivePage(item.targetPage);
         }}
